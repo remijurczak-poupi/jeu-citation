@@ -1,12 +1,13 @@
 // Solo games: the server holds the state, validates each answer and computes the score.
 import { criterionKey, data, getMatcher, matchGuess, normalizeCriterion, playerName } from './data';
+import { chainMatcher, clubLabel, seasonLabel, teammates } from './chain';
 
 let qidIndex: Map<string, number> | null = null;
 export function playerByQ(q: string): number | undefined {
   qidIndex ??= new Map(data.players.map((p, i) => [p.q, i]));
   return qidIndex.get(q);
 }
-import { MODE_RULES, type Criterion, type GameState, type GuessOutcome, type SoloMode } from '../shared/types';
+import { MODE_RULES, type ChainLink, type Criterion, type GameState, type GuessOutcome, type SoloMode } from '../shared/types';
 
 export const GRACE_MS = 2500; // network latency allowance after the timer ends
 export const MIN_GUESS_INTERVAL_MS = 150;
@@ -63,7 +64,10 @@ export function applyGuess(g: GameRow, text: string, now: number): { outcome: Gu
   const rules = MODE_RULES[g.mode];
   const found: string[] = JSON.parse(g.found);
   const cited = new Set(found.map(playerByQ).filter((p): p is number => p !== undefined));
-  const res = matchGuess(getMatcher(JSON.parse(g.criterion)), text, cited, !!rules.suddenDeath);
+  const criterion = JSON.parse(g.criterion) as Criterion;
+  const last = g.mode === 'chain' ? playerByQ(found[found.length - 1]) : undefined;
+  const matcher = last !== undefined ? chainMatcher(last, criterion) : getMatcher(criterion);
+  const res = matchGuess(matcher, text, cited, !!rules.suddenDeath);
   if (res.status === 'invalid') return { outcome: res, changed: false };
   g.guesses++;
   g.last_at = now;
@@ -108,9 +112,20 @@ export function toState(g: GameRow, now: number, extra?: Partial<GameState>): Ga
     count: g.count,
     errors: g.errors,
     found: found.map((q) => data.players[playerByQ(q) ?? -1]?.n ?? '?'),
+    ...(g.mode === 'chain' ? { chain: chainLinks(found) } : {}),
     ...(g.end_reason ? { endReason: g.end_reason } : {}),
     ...(g.daily_date ? { dailyDate: g.daily_date } : {}),
     ...(g.board_key.startsWith('archive:') ? { dailyDate: g.board_key.slice(8), archive: true } : {}),
     ...extra,
   };
+}
+
+function chainLinks(found: string[]): ChainLink[] {
+  const ps = found.map(playerByQ);
+  return ps.map((p, i) => {
+    if (p === undefined) return { name: '?' };
+    const prev = i > 0 ? ps[i - 1] : undefined;
+    const l = prev !== undefined ? teammates(prev).get(p) : undefined;
+    return { name: data.players[p].n, ...(l ? { club: clubLabel(l.club), seasons: seasonLabel(l.from, l.to) } : {}) };
+  });
 }

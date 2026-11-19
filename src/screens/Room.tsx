@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useI18n } from '../i18n';
-import { clubName, flag, themeLabel } from '../format';
-import { ThemePicker } from '../ui';
+import { clubName, flag, fmtClock, themeLabel } from '../format';
+import { ChainView, ThemePicker } from '../ui';
 import type { Nav } from '../App';
-import type { Criterion, Meta, RoomClientMsg, RoomGame, RoomServerMsg, RoomState } from '../../shared/types';
+import type { Criterion, GuessOutcome, Meta, RoomClientMsg, RoomGame, RoomServerMsg, RoomState } from '../../shared/types';
+
+const GAMES: RoomGame[] = ['bomb', 'duel', 'chain', 'royale'];
+const ICON: Record<RoomGame, string> = { bomb: '💣', duel: '⚽', chain: '🔗', royale: '👑' };
 
 export function RoomHome({ meta, nav }: { meta: Meta; nav: Nav }) {
   const { t } = useI18n();
@@ -31,10 +34,10 @@ export function RoomHome({ meta, nav }: { meta: Meta; nav: Nav }) {
       <section className="card">
         <h2>{t.rooms.create}</h2>
         <div className="modes two">
-          {(['bomb', 'duel'] as RoomGame[]).map((g) => (
+          {GAMES.map((g) => (
             <button key={g} className={`mode ${game === g ? 'on' : ''}`} onClick={() => setGame(g)}>
-              <strong>{g === 'bomb' ? '💣 ' : '⚽ '}{t.rooms[g]}</strong>
-              <small>{g === 'bomb' ? t.rooms.bombHint : t.rooms.duelHint}</small>
+              <strong>{ICON[g]} {t.rooms[g]}</strong>
+              <small>{t.rooms[`${g}Hint`]}</small>
             </button>
           ))}
         </div>
@@ -55,7 +58,10 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
   const [offset, setOffset] = useState(0);
   const [copied, setCopied] = useState(false);
   const [editTheme, setEditTheme] = useState(false);
+  const [mine, setMine] = useState<{ o: GuessOutcome; key: number } | null>(null); // battle royale: my own answers
+  const [now, setNow] = useState(Date.now());
   const ws = useRef<WebSocket | null>(null);
+  useEffect(() => { const h = setInterval(() => setNow(Date.now()), 250); return () => clearInterval(h); }, []);
 
   useEffect(() => {
     let closed = false;
@@ -67,6 +73,7 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
         const m = JSON.parse(ev.data) as RoomServerMsg;
         if (m.t === 'state') { setS(m.state); setOffset(m.state.serverNow - Date.now()); }
         else if (m.t === 'you') setMe(m.id);
+        else if (m.t === 'outcome') setMine({ o: m.outcome, key: Date.now() });
         else if (m.t === 'error') setError(t.errorsMap[m.message] ?? m.message);
       };
       sock.onclose = (ev) => {
@@ -93,8 +100,16 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
     } catch { /* cancelled */ }
   };
   const ev = s.lastEvent;
+  const royale = s.game === 'royale';
+  const alive = s.players.find((p) => p.id === me)?.lives ?? 0;
+  const canType = s.phase === 'playing' && (royale ? alive > 0 : s.turn === me);
+  const left = s.deadline ? Math.max(0, s.deadline - (now + offset)) : null;
   const banner = !ev ? null
+    : royale && ev.kind === 'ok' ? null
     : ev.kind === 'boom' ? t.rooms.boom(name(ev.player))
+    : ev.kind === 'timeout' ? t.rooms.timeout(name(ev.player))
+    : ev.kind === 'out' ? t.rooms.out((ev.players ?? [ev.player]).map(name).join(', '))
+    : ev.kind === 'restart' ? t.rooms.restart
     : ev.kind === 'hit' ? t.rooms.hit(name(ev.player))
     : ev.kind === 'ok' ? `${name(ev.player)} : ${ev.name} ✅`
     : ev.kind === 'duplicate' ? `${name(ev.player)} : ${t.duplicate} (${ev.name}) ❌`
@@ -104,7 +119,7 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
     <div className="page narrow room">
       <section className="card">
         <div className="room-head">
-          <span className="badge">{s.game === 'bomb' ? '💣' : '⚽'} {t.rooms[s.game]}</span>
+          <span className="badge">{ICON[s.game]} {t.rooms[s.game]}</span>
           <span className="room-code">{s.code}</span>
         </div>
         <p className="room-theme">{themeLabel(s.criterion, meta, lang, t)}</p>
@@ -119,10 +134,23 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
       {s.phase === 'playing' && s.game === 'bomb' && <BombTable s={s} me={me} />}
       {s.phase === 'playing' && s.game === 'duel' && <DuelTrack s={s} me={me} offset={offset} />}
 
+      {s.phase === 'playing' && left !== null && (
+        <div className="room-clock">
+          {royale && <small>{t.rooms.round(s.round)}</small>}
+          <span className={`big-num ${left < 5000 ? 'low' : ''}`}>{fmtClock(left)}</span>
+        </div>
+      )}
+      {s.phase === 'playing' && s.game === 'chain' && s.chain && <ChainView links={s.chain} />}
+
       {s.phase === 'playing' && (
         <>
-          <p className={`turn ${s.turn === me ? 'mine' : ''}`}>{s.turn === me ? t.rooms.yourTurn : t.rooms.turnOf(name(s.turn))}</p>
-          {s.turn === me && (
+          {!royale && <p className={`turn ${s.turn === me ? 'mine' : ''}`}>{s.turn === me ? t.rooms.yourTurn : t.rooms.turnOf(name(s.turn))}</p>}
+          {royale && mine && mine.o.status !== 'invalid' && (
+            <div key={mine.key} className={`flash ${mine.o.status}`}>
+              {mine.o.status === 'ok' ? `${t.ok} ${mine.o.name}` : mine.o.status === 'duplicate' ? `${t.duplicate} : ${mine.o.name}` : mine.o.name ? t.wrongKnown(mine.o.name) : t.wrong}
+            </div>
+          )}
+          {canType && (
             <form className="guess-form" onSubmit={(e) => { e.preventDefault(); if (text.trim()) { send({ t: 'guess', text: text.trim() }); setText(''); } }}>
               <input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={t.typeHere} autoComplete="off" autoCorrect="off" spellCheck={false} enterKeyHint="send" />
             </form>
@@ -144,7 +172,8 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
             <li key={p.id} className={`${p.connected ? '' : 'off'} ${p.lives <= 0 && s.phase !== 'lobby' ? 'out' : ''}`}>
               <span>{flag(p.country)}</span>
               <span className="lb-name">{p.pseudo}{p.host && ' 👑'}{p.id === me && <em> ({t.you})</em>}<small>{clubName(meta, p.club, lang, t)}</small></span>
-              {s.game === 'bomb' && s.phase !== 'lobby' && <span className="lives">{'❤️'.repeat(Math.max(0, p.lives))}</span>}
+              {(s.game === 'bomb' || s.game === 'chain') && s.phase !== 'lobby' && <span className="lives">{'❤️'.repeat(Math.max(0, p.lives))}</span>}
+              {royale && s.phase !== 'lobby' && <span className="royale-score"><strong>{p.roundFound ?? 0}</strong> <small>{t.rooms.thisRound}</small> · {p.found ?? 0} <small>{t.rooms.total}</small></span>}
             </li>
           ))}
         </ul>

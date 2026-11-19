@@ -1,5 +1,5 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode } from '../shared/types';
+import type { Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, WarBoard } from '../shared/types';
 
 export interface Session extends Profile { id: string; secret: string }
 
@@ -39,6 +39,7 @@ export const api = {
   finish: (id: string) => call<GameState>('POST', `/games/${id}/finish`),
   daily: () => call<DailyInfo>('GET', '/daily'),
   dailyHistory: () => call<DailyHistoryItem[]>('GET', '/daily/history'),
+  war: (by: 'club' | 'country', period: 'week' | 'all') => call<WarBoard>('GET', `/war?by=${by}&period=${period}`),
   leaderboard: (p: { mode: SoloMode; criterion?: Criterion; period?: 'day' | 'week' | 'all'; ranking?: Ranking; date?: string }) => {
     const q = new URLSearchParams({ mode: p.mode, period: p.period ?? 'all', ranking: p.ranking ?? 'count' });
     if (p.date) q.set('date', p.date);

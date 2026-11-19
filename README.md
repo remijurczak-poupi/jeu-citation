@@ -50,6 +50,7 @@ No autocomplete: the player has to remember the name. Matching is tolerant:
 | Unlimited | No clock; ends after 10 minutes without an answer |
 | Hardcore | One mistake or repeat ends the game; 60 s per answer |
 | Streak | 15 s on the clock, each right answer resets it |
+| Chain | Starts from a well-known player of the theme: each answer must be a teammate of the previous one (same club, overlapping seasons, within the theme). 30 s per link |
 | Daily | Same theme for everyone, 5 minutes, one ranked attempt per profile. Alternates easy and hard days |
 
 The server owns the clock and validates every answer, so scores can't be forged from the browser. A profile can start 80 games per hour.
@@ -59,6 +60,12 @@ Daily challenge leaderboards: number of players named, and **rarity points** (1 
 **Bomb** (2 to 10 players): the holder must name a valid player to pass the bomb to the next player. A hidden fuse (15 to 45 s) explodes in someone's hands: they lose one of their 2 lives. Last one standing wins.
 
 **Duel** (2 players): the ball starts at the centre and rolls towards a player (20 s to reach them). Naming a valid player sends it back from where it is, a bit faster each time. The one it reaches loses.
+
+**Chain** (2 to 10 players): in turn, name a teammate of the last player of the chain within 20 s, or lose one of 2 lives. If every teammate has been named, a new chain starts.
+
+**Battle royale** (2 to 20 players): everyone answers at once, each player can be named only once in the room. Rounds last 30 s, then 2 s less each round (15 s minimum). At the end of a round, whoever named the fewest players is out (ties go out together, unless everyone is tied). Last one standing wins.
+
+**Clubs & countries war**: each profile's daily challenge results (players named) add up for their club and their country, by week (Monday to Sunday, Paris time) or all time. Only the daily challenge counts, so playing more games doesn't help.
 
 ## Profiles
 

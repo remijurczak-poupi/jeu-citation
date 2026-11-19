@@ -5,7 +5,8 @@ import { dailyCriterion, dailyNumber, todayKey } from './daily';
 import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
-import type { Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
+import { chainStart } from './chain';
+import type { WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
 import { MODE_RULES } from '../shared/types';
 
 export { Room } from './room';
@@ -147,7 +148,7 @@ app.post('/api/profile/recover', async (c) => {
 });
 
 // ---------- solo games ----------
-const SOLO_MODES: SoloMode[] = ['timed1', 'timed3', 'timed10', 'unlimited', 'hardcore', 'streak', 'daily'];
+const SOLO_MODES: SoloMode[] = ['timed1', 'timed3', 'timed10', 'unlimited', 'hardcore', 'streak', 'chain', 'daily'];
 
 async function loadGame(c: C, id: string, me: Me): Promise<GameRow> {
   const g = await c.env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(id).first<GameRow>();
@@ -217,6 +218,11 @@ app.post('/api/games', async (c) => {
     const criterion = parseCriterion(body.criterion);
     if (scopeSize(criterion) < MIN_THEME_SIZE) throw new HttpError(400, 'theme_too_small');
     g = newGame(crypto.randomUUID(), me.id, mode, criterion, now);
+    if (mode === 'chain') {
+      const start = chainStart(criterion);
+      if (start === null) throw new HttpError(400, 'theme_too_small');
+      g.found = JSON.stringify([data.players[start].q]);
+    }
   }
   await c.env.DB.prepare(
     `INSERT INTO games (id, device_id, mode, criterion, board_key, daily_date, started_at, deadline, last_at, status, found, count, points, errors, guesses, end_reason, version)
@@ -342,6 +348,27 @@ app.get('/api/leaderboard', async (c) => {
     rows: top.map(toRow),
     me: myIdx >= 0 ? toRow(rows[myIdx], myIdx) : null,
   });
+});
+
+// ---------- clubs & countries war ----------
+// Each supporter's daily challenge results count for their club and their country.
+// Daily scores only (one attempt a day), so spamming games doesn't help.
+app.get('/api/war', async (c) => {
+  const me = c.get('me');
+  const by = c.req.query('by') === 'country' ? 'country' : 'club';
+  const period = c.req.query('period') === 'all' ? 'all' : 'week';
+  const today = todayKey();
+  const weekday = (new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7; // 0 = Monday
+  const from = period === 'week' ? todayKey(Date.parse(today + 'T12:00:00Z') - weekday * 86400_000) : '0000-00-00';
+  const res = await c.env.DB.prepare(
+    `SELECT p.${by} AS k, SUM(s.count) AS points, COUNT(DISTINCT s.device_id) AS players
+     FROM scores s JOIN profiles p ON p.id = s.device_id
+     WHERE s.board_key >= ? AND s.board_key < 'daily;' AND p.${by} <> 'other'
+     GROUP BY p.${by} ORDER BY points DESC`,
+  ).bind('daily:' + from).all<{ k: string; points: number; players: number }>();
+  const rows: WarRow[] = res.results.map((r, i) => ({ rank: i + 1, key: r.k, points: r.points, players: r.players }));
+  const mine = me ? rows.find((r) => r.key === me[by]) ?? null : null;
+  return c.json({ by, period, from, rows: rows.slice(0, 50), me: mine, total: rows.length });
 });
 
 // ---------- rooms ----------

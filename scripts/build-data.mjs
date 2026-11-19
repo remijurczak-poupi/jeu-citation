@@ -467,10 +467,12 @@ async function main() {
     // Precomputed name keys (see worker/data.ts): full names/aliases, and surname forms.
     const full = new Set();
     const sur = new Set();
+    // Surnames come from labels only: aliases include nicknames ("Iran's Zidane") whose last word is someone else's name.
+    const labels = new Set(Object.values(n.labels));
     for (const nm of [display, ...alt]) {
       const key = compact(nm.replace(/\(.*?\)/g, ''));
       if (key.length >= 2) full.add(key);
-      for (const sk of surnameKeys(nm)) sur.add(sk);
+      if (nm === display || labels.has(nm)) for (const sk of surnameKeys(nm)) sur.add(sk);
     }
     for (const key of full) sur.delete(key);
     players.push({

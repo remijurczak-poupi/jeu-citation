@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useI18n } from '../i18n';
 import { fmtClock, themeLabel } from '../format';
-import { Leaderboard } from '../ui';
+import { ChainView, Leaderboard } from '../ui';
 import type { Nav } from '../App';
 import type { GameState, GuessOutcome, Meta } from '../../shared/types';
 import { MODE_RULES } from '../../shared/types';
@@ -98,9 +98,11 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
         />
       </form>
       <div className="flash-slot">{flash && <div key={flash.key} className={`flash ${flash.kind}`}>{flash.text}</div>}</div>
-      <ol className="found" reversed>
-        {[...g.found].reverse().map((n, i) => <li key={g.found.length - i}>{n}</li>)}
-      </ol>
+      {g.chain ? <ChainView links={g.chain} /> : (
+        <ol className="found" reversed>
+          {[...g.found].reverse().map((n, i) => <li key={g.found.length - i}>{n}</li>)}
+        </ol>
+      )}
       <button className="link danger" onClick={stop}>{t.giveUp}</button>
     </div>
   );
@@ -142,7 +144,12 @@ function Result({ g, meta, nav, theme, title }: { g: GameState; meta: Meta; nav:
           ? <Leaderboard mode="daily" date={g.dailyDate} meta={meta} rarity />
           : <Leaderboard mode={g.mode} criterion={g.criterion} meta={meta} />}
       </section>}
-      {g.found.length > 0 && (
+      {g.chain ? (
+        <section className="card">
+          <h2>{t.modes.chain}</h2>
+          <ChainView links={g.chain} done />
+        </section>
+      ) : g.found.length > 0 && (
         <section className="card">
           <h2>{t.found}</h2>
           <ol className="found">{g.found.map((n, i) => <li key={i}>{n}</li>)}</ol>

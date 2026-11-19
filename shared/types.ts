@@ -33,7 +33,7 @@ export const CRITERION_KEYS: (keyof Criterion)[] = [
   'heightMin', 'heightMax', 'tournament', 'tournamentWon', 'ucl', 'champion', 'topScorer', 'ballonDor',
 ];
 
-export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'unlimited' | 'hardcore' | 'streak' | 'daily';
+export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'unlimited' | 'hardcore' | 'streak' | 'chain' | 'daily';
 
 /** Timers in seconds. duration = total time; streakSeconds = time left resets on each right answer;
  * idleSeconds = game ends after this long without an answer; suddenDeath = one mistake or duplicate ends it. */
@@ -45,6 +45,7 @@ export const MODE_RULES: Record<SoloMode, { duration?: number; streakSeconds?: n
   unlimited: { idleSeconds: 600 },
   hardcore: { idleSeconds: 60, suddenDeath: true },
   streak: { streakSeconds: 15 },
+  chain: { streakSeconds: 30 }, // each answer must be a teammate of the previous player
 };
 
 /** l = seasons (start years) played in each league, since the first season of the dataset. */
@@ -78,7 +79,9 @@ export interface GameState {
   total?: number;
   dailyDate?: string;
   archive?: boolean; // replay of a past daily challenge, not ranked
+  chain?: ChainLink[]; // chain mode: the starting player then each answer, with the club they shared
 }
+export interface ChainLink { name: string; club?: string; seasons?: string }
 
 export type GuessOutcome =
   | { status: 'ok'; name: string }
@@ -101,21 +104,28 @@ export interface LeaderboardRow { rank: number; pseudo: string; club: string; co
 export type Ranking = 'count' | 'rarity';
 
 // ----- Multiplayer rooms -----
-export type RoomGame = 'bomb' | 'duel';
-export interface RoomPlayer { id: string; pseudo: string; club: string; country: string; lives: number; connected: boolean; host: boolean }
+export type RoomGame = 'bomb' | 'duel' | 'chain' | 'royale';
+export interface RoomPlayer { id: string; pseudo: string; club: string; country: string; lives: number; connected: boolean; host: boolean; found?: number; roundFound?: number }
 export interface RoomState {
   code: string;
   game: RoomGame;
   criterion: Criterion;
   phase: 'lobby' | 'playing' | 'ended';
   players: RoomPlayer[];
-  turn: string | null; // bomb: holder; duel: player the ball is heading to
+  turn: string | null; // bomb: holder; duel: player the ball is heading to; chain: player who must answer; royale: null (everyone plays)
+  deadline?: number; // chain: end of the current turn; royale: end of the current round
   ball?: { pos: number; dir: -1 | 1; speed: number; at: number }; // duel: pos 0 = first player, 1 = second
   round: number;
   cited: string[];
   winner: string | null;
-  lastEvent?: { kind: 'ok' | 'wrong' | 'duplicate' | 'boom' | 'hit'; player: string; name?: string };
+  chain?: ChainLink[]; // chain: the current chain, oldest first
+  lastEvent?: { kind: 'ok' | 'wrong' | 'duplicate' | 'boom' | 'hit' | 'timeout' | 'out' | 'restart'; player: string; name?: string; players?: string[] };
   serverNow: number;
 }
 export type RoomClientMsg = { t: 'start' } | { t: 'guess'; text: string } | { t: 'criterion'; criterion: Criterion };
-export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; message: string } | { t: 'you'; id: string };
+export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; message: string } | { t: 'you'; id: string } | { t: 'outcome'; outcome: GuessOutcome };
+
+// ----- Clubs & countries war -----
+/** key = club Wikidata id or country code; points = sum of the supporters' daily challenge counts. */
+export interface WarRow { rank: number; key: string; points: number; players: number }
+export interface WarBoard { by: 'club' | 'country'; period: 'week' | 'all'; from: string; rows: WarRow[]; me: WarRow | null; total: number }

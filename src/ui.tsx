@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, ApiError, getSession, setSession } from './api';
 import { useI18n } from './i18n';
 import { clubName, COUNTRIES, countryName, flag, leagueName, seasonLabel } from './format';
-import type { Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
+import type { WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
 
 // ---------- Stadium curtain ----------
 /** One half of an illustrated (original, generic) stadium. The two halves meet on the halfway line. */
@@ -353,4 +353,55 @@ export function ProfileForm({ meta, onDone }: { meta: Meta; onDone: () => void }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`card ${className}`}>{children}</div>;
+}
+
+// ---------- Chain of teammates ----------
+/** The chain, newest first: the player to link from is on top. */
+export function ChainView({ links, done }: { links: ChainLink[]; done?: boolean }) {
+  const { t } = useI18n();
+  const last = links[links.length - 1];
+  return (
+    <div className="chain">
+      {!done && last && <p className="chain-now"><small>{t.chainNow}</small><strong>{last.name}</strong></p>}
+      <ol className="chain-links">
+        {[...links].reverse().map((l, i) => (
+          <li key={links.length - i} className={i === 0 && !done ? 'head' : ''}>
+            <span className="chain-name">{l.name}</span>
+            {l.club && <small>{t.chainVia(l.club, l.seasons ?? '')}</small>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// ---------- Clubs & countries war ----------
+export function War({ meta }: { meta: Meta }) {
+  const { t, lang } = useI18n();
+  const [by, setBy] = useState<'club' | 'country'>('club');
+  const [period, setPeriod] = useState<'week' | 'all'>('week');
+  const [board, setBoard] = useState<WarBoard | null>(null);
+  useEffect(() => { setBoard(null); api.war(by, period).then(setBoard).catch(() => {}); }, [by, period]);
+  const label = (k: string) => (by === 'club' ? clubName(meta, k, lang, t) : `${flag(k)} ${countryName(k, lang)}`);
+  const row = (r: WarRow, me?: boolean) => (
+    <li key={r.key} className={me ? 'me' : ''}>
+      <span className="lb-rank">{r.rank}</span>
+      <span className="lb-name">{label(r.key)}<small>{t.war.supporters(r.players)}</small></span>
+      <span className="lb-score">{r.points}</span>
+    </li>
+  );
+  return (
+    <div className="leaderboard war">
+      <div className="tabs">
+        {(['club', 'country'] as const).map((b) => <button key={b} className={by === b ? 'on' : ''} onClick={() => setBy(b)}>{b === 'club' ? t.war.clubs : t.war.countries}</button>)}
+        {(['week', 'all'] as const).map((p) => <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{p === 'week' ? t.war.week : t.war.all}</button>)}
+      </div>
+      {!board ? <p className="hint">…</p> : board.rows.length === 0 ? <p className="hint">{t.war.empty}</p> : (
+        <ol>
+          {board.rows.map((r) => row(r, board.me?.key === r.key))}
+          {board.me && !board.rows.some((r) => r.key === board.me!.key) && <><li className="sep">…</li>{row(board.me, true)}</>}
+        </ol>
+      )}
+    </div>
+  );
 }

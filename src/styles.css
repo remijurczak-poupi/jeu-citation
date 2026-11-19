@@ -209,3 +209,23 @@ label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; fo
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Chain of teammates ---------- */
+.chain { display: grid; gap: 10px; }
+.chain-now { display: grid; gap: 2px; text-align: center; margin: 0; padding: 12px; border: 1px solid var(--accent); border-radius: 14px; background: rgba(230, 194, 41, 0.08); }
+.chain-now small { color: var(--muted); }
+.chain-now strong { font-family: var(--font-display); font-size: 32px; letter-spacing: 0.5px; color: var(--accent); }
+.chain-links { list-style: none; margin: 0; padding: 0 0 0 18px; border-left: 2px dashed var(--line); display: grid; gap: 8px; }
+.chain-links li { position: relative; display: grid; }
+.chain-links li::before { content: ''; position: absolute; left: -24px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.chain-links li.head::before { background: var(--accent); }
+.chain-links .chain-name { font-weight: 700; }
+.chain-links small { color: var(--muted); }
+
+/* ---------- Room clock and battle royale ---------- */
+.room-clock { display: grid; justify-items: center; gap: 2px; }
+.room-clock small { color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+.room-clock .big-num.low { color: var(--bad); text-shadow: 0 0 12px rgba(248, 113, 113, 0.6); animation: pulse 0.8s infinite; }
+.royale-score { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.royale-score strong { color: var(--accent); font-size: 18px; }
+.royale-score small { color: var(--muted); }

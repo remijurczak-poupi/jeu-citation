@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, getSession } from './api';
 import { dictionaries, I18n, initialLang, LANGS, useI18n, type Lang } from './i18n';
 import { themeLabel } from './format';
-import { Leaderboard, ProfileForm, Silhouette, StadiumCurtain, ThemePicker, type CurtainState } from './ui';
+import { Leaderboard, ProfileForm, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
 import { GameScreen } from './screens/Game';
 import { RoomScreen, RoomHome } from './screens/Room';
 import type { Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
@@ -156,7 +156,7 @@ function Home({ meta, nav }: { meta: Meta; nav: Nav }) {
 }
 
 // ---------- Solo setup ----------
-const SOLO: SoloMode[] = ['timed1', 'timed3', 'timed10', 'unlimited', 'hardcore', 'streak'];
+const SOLO: SoloMode[] = ['timed1', 'timed3', 'timed10', 'unlimited', 'hardcore', 'streak', 'chain'];
 function SoloSetup({ meta, nav }: { meta: Meta; nav: Nav }) {
   const { t } = useI18n();
   const [mode, setMode] = useState<SoloMode>('timed3');
@@ -207,6 +207,11 @@ function Leaderboards({ meta }: { meta: Meta }) {
         {mode !== 'daily' && <ThemePicker meta={meta} value={criterion} onChange={setCriterion} />}
         {mode !== 'daily' && <p className="hint">{themeLabel(criterion, meta, lang, t)}</p>}
         <Leaderboard mode={mode} criterion={mode === 'daily' ? undefined : criterion} meta={meta} rarity={mode === 'daily'} />
+      </section>
+      <section className="card">
+        <h2>{t.war.title}</h2>
+        <p className="hint">{t.war.hint}</p>
+        <War meta={meta} />
       </section>
     </div>
   );
