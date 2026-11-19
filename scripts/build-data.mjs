@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { compact, surnameKeys } from '../worker/normalize.ts';
 
 const ROOT = path.dirname(path.dirname(new URL(import.meta.url).pathname));
 const CACHE = path.join(ROOT, '.cache');
@@ -24,6 +25,14 @@ const FIRST_SEASON = 2000;
 const now = new Date();
 const CURRENT_SEASON = now.getUTCMonth() >= 6 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
 const NAME_LANGS = ['en', 'fr', 'es', 'it', 'de', 'pt', 'nl'];
+const ALIAS_LANGS = ['en', 'fr', 'es', 'it', 'de', 'pt'];
+// Tournament codes: WC = FIFA World Cup, EU = UEFA Euro, CA = Copa América, CL = Champions League.
+const TOURNAMENTS = [
+  { code: 'WC', qid: 'Q19317', since: 1998 },
+  { code: 'EU', qid: 'Q260858', since: 2000 },
+];
+// Home nations have no ISO 3166-1 code; their teams are told apart by label.
+const HOME_NATIONS = { England: 'GB-ENG', Scotland: 'GB-SCT', Wales: 'GB-WLS', Northern: 'GB-NIR' };
 
 fs.mkdirSync(CACHE, { recursive: true });
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
@@ -103,6 +112,22 @@ async function main() {
     (seasonsKnown[lg.id] ??= new Set()).add(year);
   }
 
+  // 1b. Since 2020 some seasons list "men's team" items (Q103229495) instead of the club: map them to their parent club (P361).
+  const teamParentRows = await sparql(
+    `SELECT ?t ?club WHERE {
+      VALUES ?t { ${Object.keys(clubSeasons).map((c) => 'wd:' + c).join(' ')} }
+      ?t wdt:P31 wd:Q103229495 ; wdt:P361 ?club . ?club wdt:P31/wdt:P279* wd:Q476028 .
+    }`,
+    'team-parents',
+  );
+  for (const r of teamParentRows) {
+    const t = qid(r.t), c = qid(r.club);
+    if (!clubSeasons[t] || t === c) continue;
+    for (const [lg, ys] of Object.entries(clubSeasons[t])) for (const y of ys) ((clubSeasons[c] ??= {})[lg] ??= new Set()).add(y);
+    delete clubSeasons[t];
+  }
+  console.log(`team items mapped to clubs: ${teamParentRows.length}`);
+
   // 2. Seasons missing from Wikidata: hand-filled overrides, then current members for the ongoing season.
   const overrides = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts/season-overrides.json'), 'utf8'));
   for (const [lg, seasons] of Object.entries(overrides)) {
@@ -147,6 +172,24 @@ async function main() {
     const odd = Object.entries(counts).filter(([, n]) => n !== 18 && n !== 20);
     if (odd.length) console.warn(`CHECK ${lg}: unusual club counts`, Object.fromEntries(odd));
   }
+  // 2b. Trophies from Wikidata: league champions (P1346 on league seasons) and Champions League winners.
+  const champRows = await sparql(
+    `SELECT ?league ?label ?winner WHERE {
+      VALUES ?league { ${LEAGUES.map((l) => 'wd:' + l.qid).join(' ')} wd:Q18278 }
+      ?season wdt:P3450 ?league ; rdfs:label ?label ; p:P1346 ?ws . FILTER(LANG(?label) = "en")
+      ?ws ps:P1346 ?winner . FILTER NOT EXISTS { ?ws pq:P642 ?of }
+      ?winner wdt:P31/wdt:P279* wd:Q476028 .
+    }`,
+    'champions',
+  );
+  const clubTitles = {}; // club -> { PL: [years], CL: [years] }
+  for (const r of champRows) {
+    const m = /^(\d{4})/.exec(r.label.v);
+    if (!m || +m[1] < FIRST_SEASON) continue;
+    const lg = qid(r.league) === 'Q18278' ? 'CL' : leagueByQ[qid(r.league)].id;
+    ((clubTitles[qid(r.winner)] ??= {})[lg] ??= new Set()).add(+m[1]);
+  }
+
   // 3. Club labels.
   const clubQs = Object.keys(clubSeasons);
   const clubRows = await sparql(
@@ -161,6 +204,37 @@ async function main() {
   for (const r of clubRows) {
     const c = qid(r.club);
     (clubNames[c] ??= {})[r.label.l] = r.label.v;
+  }
+
+  // Since 2020 Wikidata lists some Bundesliga seasons with duplicate "team" items (VfL Wolfsburg Q97906010…)
+  // that share the club's English label: fold them into the oldest item, which holds the players' stints.
+  const byLabel = {};
+  for (const c of clubQs) if (clubNames[c]?.en) (byLabel[clubNames[c].en] ??= []).push(c);
+  for (const qs of Object.values(byLabel)) {
+    if (qs.length < 2) continue;
+    qs.sort((a, b) => +a.slice(1) - +b.slice(1));
+    const [main, ...dups] = qs;
+    for (const d of dups) {
+      for (const [lg, ys] of Object.entries(clubSeasons[d])) for (const y of ys) ((clubSeasons[main][lg] ??= new Set())).add(y);
+      for (const [k, ys] of Object.entries(clubTitles[d] ?? {})) for (const y of ys) ((clubTitles[main] ??= {})[k] ??= new Set()).add(y);
+      delete clubSeasons[d]; delete clubTitles[d];
+      clubQs.splice(clubQs.indexOf(d), 1);
+      console.log(`  merged duplicate club item ${d} into ${main} (${clubNames[main].en})`);
+    }
+  }
+
+  // Titles up to the 2024-25 season are hardcoded (Wikidata P1346 is patchy: Bundesliga 2020-24 missing, La Liga 2018 doubled…);
+  // later seasons still come from Wikidata.
+  const KNOWN_TITLES = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts/titles.json'), 'utf8'));
+  const qByName = Object.fromEntries(clubQs.filter((c) => clubNames[c]?.en).map((c) => [clubNames[c].en, c]));
+  for (const t of Object.values(clubTitles)) for (const ys of Object.values(t)) for (const y of [...ys]) if (y <= KNOWN_TITLES.until) ys.delete(y);
+  for (const [lg, byYear] of Object.entries(KNOWN_TITLES.champions)) {
+    for (const [y, name] of Object.entries(byYear)) {
+      if (!name) continue;
+      const c = qByName[name];
+      if (!c) { if (lg !== 'CL') console.warn(`WARNING: title holder not found: ${lg} ${y} ${name}`); continue; }
+      ((clubTitles[c] ??= {})[lg] ??= new Set()).add(+y);
+    }
   }
 
   // 4. Club memberships (stints) of footballers at those clubs.
@@ -226,29 +300,138 @@ async function main() {
   }
   console.log(`players: ${byPlayer.size} candidates, ${kept.length} kept`);
 
-  // 5. Names, aliases and notoriety.
-  const names = new Map();
-  for (const [i, batch] of chunk(kept.map((k) => k.q), 400).entries()) {
+  // 5. International tournaments (Wikidata P1344 "participant in"): World Cup since 1998, Euro since 2000.
+  const tournaments = new Map(); // player -> Set(codes like WC2006, EU2008)
+  for (const t of TOURNAMENTS) {
     const rows = await sparql(
-      `SELECT ?p ?sl ?label ?alias WHERE {
-        VALUES ?p { ${batch.map((c) => 'wd:' + c).join(' ')} }
-        ?p wikibase:sitelinks ?sl .
-        OPTIONAL { ?p rdfs:label ?label . FILTER(LANG(?label) IN (${NAME_LANGS.map((l) => `"${l}"`).join(',')},"mul")) }
-        OPTIONAL { ?p skos:altLabel ?alias . FILTER(LANG(?alias) IN ("en","fr","mul")) }
+      `SELECT ?e ?label ?p WHERE {
+        ?e wdt:P3450 wd:${t.qid} ; rdfs:label ?label . FILTER(LANG(?label) = "en")
+        ?p wdt:P1344 ?e ; wdt:P106 wd:Q937857 .
       }`,
-      'names' + i,
+      'tour-' + t.code,
     );
     for (const r of rows) {
+      const m = /(\d{4})/.exec(r.label.v);
+      if (!m || /qualif/i.test(r.label.v) || +m[1] < t.since) continue;
       const p = qid(r.p);
-      const e = names.get(p) ?? { sl: +r.sl, labels: {}, aliases: new Set() };
-      if (r.label) e.labels[r.label.l] = r.label.v;
-      if (r.alias) e.aliases.add(r.alias.v);
-      names.set(p, e);
+      (tournaments.get(p) ?? tournaments.set(p, new Set()).get(p)).add(t.code + m[1]);
     }
-    if (i % 10 === 0) console.log(`names batch ${i}`);
+  }
+  // Wikipedia extras (scripts/build-wiki.mjs): squads of every edition, Champions League clubs, Ballon d'Or, top scorers.
+  const wikiFile = path.join(ROOT, 'scripts/wiki-data.json');
+  const wiki = fs.existsSync(wikiFile) ? JSON.parse(fs.readFileSync(wikiFile, 'utf8')) : null;
+  const won = new Map(); // player -> Set(codes)
+  if (wiki) {
+    for (const [q, codes] of Object.entries(wiki.tournaments.players)) for (const c of codes) (tournaments.get(q) ?? tournaments.set(q, new Set()).get(q)).add(c);
+    for (const [code, qs] of Object.entries(wiki.tournaments.winners)) for (const q of qs) (won.get(q) ?? won.set(q, new Set()).get(q)).add(code);
+  } else console.warn('WARNING: scripts/wiki-data.json missing, run scripts/build-wiki.mjs first');
+  const keptSet = new Set(kept.map((k) => k.q));
+  const extraQs = [...tournaments.keys()].filter((q) => !keptSet.has(q));
+  console.log(`tournament players: ${tournaments.size} (${extraQs.length} not in the league base)`);
+
+  // 6. Names, aliases and notoriety.
+  const names = new Map();
+  const fetchNames = async (ids, tag) => {
+    for (const [i, batch] of chunk(ids, 400).entries()) {
+      const rows = await sparql(
+        `SELECT ?p ?sl ?label ?alias WHERE {
+          VALUES ?p { ${batch.map((c) => 'wd:' + c).join(' ')} }
+          ?p wikibase:sitelinks ?sl .
+          OPTIONAL { ?p rdfs:label ?label . FILTER(LANG(?label) IN (${NAME_LANGS.map((l) => `"${l}"`).join(',')},"mul")) }
+          OPTIONAL { ?p skos:altLabel ?alias . FILTER(LANG(?alias) IN (${ALIAS_LANGS.map((l) => `"${l}"`).join(',')},"mul")) }
+        }`,
+        tag + i,
+      );
+      for (const r of rows) {
+        const p = qid(r.p);
+        const e = names.get(p) ?? { sl: +r.sl, labels: {}, aliases: new Set() };
+        if (r.label) e.labels[r.label.l] = r.label.v;
+        if (r.alias) e.aliases.add(r.alias.v);
+        names.set(p, e);
+      }
+      if (i % 10 === 0) console.log(`${tag} batch ${i}`);
+    }
+  };
+  await fetchNames(kept.map((k) => k.q), 'names');
+  await fetchNames(extraQs, 'names-x');
+
+  // 7. Player attributes: positions, nationality, height, birth, senior national team, still active.
+  const allQs = [...kept.map((k) => k.q), ...extraQs];
+  const attrs = new Map(allQs.map((q) => [q, { pos: new Set(), nat: new Set(), sportNat: new Set() }]));
+  const POS = { Q201330: 'GK', Q336286: 'DF', Q193592: 'MF', Q280658: 'FW' };
+  // Senior men's national teams -> country code.
+  const teamRows = await sparql(
+    `SELECT ?t ?tl ?code WHERE {
+      ?t wdt:P31 wd:Q135408445 ; rdfs:label ?tl . FILTER(LANG(?tl) = "en")
+      OPTIONAL { ?t wdt:P17 ?c . ?c wdt:P297 ?code }
+    }`,
+    'national-teams',
+  );
+  const nationalTeams = new Map();
+  for (const r of teamRows) {
+    const code = HOME_NATIONS[r.tl.v.split(' ')[0]] ?? r.code;
+    if (code && !nationalTeams.has(qid(r.t))) nationalTeams.set(qid(r.t), code);
+  }
+  console.log(`national teams: ${nationalTeams.size}`);
+  for (const [i, batch] of chunk(allQs, 300).entries()) {
+    const values = batch.map((c) => 'wd:' + c).join(' ');
+    const posRows = await sparql(
+      `SELECT DISTINCT ?p ?main WHERE {
+        VALUES ?p { ${values} } VALUES ?main { ${Object.keys(POS).map((k) => 'wd:' + k).join(' ')} }
+        ?p wdt:P413 ?pos . ?pos wdt:P279* ?main .
+      }`,
+      'pos' + i,
+    );
+    for (const r of posRows) attrs.get(qid(r.p))?.pos.add(POS[qid(r.main)]);
+    const bioRows = await sparql(
+      `SELECT ?p ?h ?birth ?cit ?sport WHERE {
+        VALUES ?p { ${values} }
+        OPTIONAL { ?p p:P2048/psn:P2048/wikibase:quantityAmount ?h }
+        OPTIONAL { ?p wdt:P569 ?birth }
+        OPTIONAL { ?p wdt:P27 ?c1 . ?c1 wdt:P297 ?cit }
+        OPTIONAL { ?p wdt:P1532 ?c2 . ?c2 wdt:P297|wdt:P300 ?sport }
+      }`,
+      'bio' + i,
+    );
+    for (const r of bioRows) {
+      const a = attrs.get(qid(r.p));
+      if (!a) continue;
+      if (r.h && !a.h) { const h = Math.round(+r.h * 100); if (h > 150 && h < 215) a.h = h; }
+      if (r.birth && !a.birth) a.birth = +r.birth.slice(0, 4);
+      if (r.cit) a.nat.add(r.cit);
+      if (r.sport) a.sportNat.add(r.sport);
+    }
+    const ntRows = await sparql(
+      `SELECT ?p ?t ?caps WHERE {
+        VALUES ?p { ${values} }
+        ?p p:P54 ?st . ?st ps:P54 ?t .
+        OPTIONAL { ?st pq:P1350 ?caps }
+      }`,
+      'nt3-' + i,
+    );
+    for (const r of ntRows) {
+      const a = attrs.get(qid(r.p));
+      const code = nationalTeams.get(qid(r.t));
+      if (!a || !code) continue;
+      a.nt = code;
+      a.caps = Math.max(a.caps ?? 0, r.caps ? +r.caps : 0);
+    }
+    const actRows = await sparql(
+      `SELECT ?p (MAX(YEAR(?st)) AS ?y) WHERE {
+        VALUES ?p { ${values} }
+        ?p p:P54 ?s . ?s ps:P54 ?club ; pq:P580 ?st .
+        FILTER NOT EXISTS { ?s pq:P582 ?e }
+        ?club wdt:P31 wd:Q476028 .
+      } GROUP BY ?p`,
+      'act' + i,
+    );
+    for (const r of actRows) { const a = attrs.get(qid(r.p)); if (a) a.openSince = +r.y; }
+    if (i % 10 === 0) console.log(`attributes batch ${i}`);
   }
 
-  // 6. Assemble compact output.
+  // 8. Assemble compact output.
+  const uclByClub = new Map();
+  for (const [y, qs] of Object.entries(wiki?.championsLeague ?? {})) for (const q of qs) (uclByClub.get(q) ?? uclByClub.set(q, new Set()).get(q)).add(+y);
   const clubsUsed = [...new Set(kept.flatMap((k) => k.stints.map((s) => s.club)))];
   const clubIdx = new Map(clubsUsed.map((c, i) => [c, i]));
   const clubs = clubsUsed.map((c) => ({
@@ -256,11 +439,17 @@ async function main() {
     n: clubNames[c]?.en ?? clubNames[c]?.fr ?? c,
     ...(clubNames[c]?.fr && clubNames[c].fr !== clubNames[c].en ? { nf: clubNames[c].fr } : {}),
     l: Object.fromEntries(Object.entries(clubSeasons[c]).map(([lg, ys]) => [lg, [...ys].sort((a, b) => a - b)])),
+    ...(uclByClub.get(c) ? { cl: [...uclByClub.get(c)].sort((a, b) => a - b) } : {}),
+    ...(clubTitles[c]?.CL ? { cw: [...clubTitles[c].CL].sort((a, b) => a - b) } : {}),
+    ...(Object.keys(clubTitles[c] ?? {}).some((k) => k !== 'CL')
+      ? { ch: Object.fromEntries(Object.entries(clubTitles[c]).filter(([k]) => k !== 'CL').map(([k, ys]) => [k, [...ys].sort((a, b) => a - b)])) }
+      : {}),
   }));
   const players = [];
   const stints = [];
   const looksLikeName = (s) => s && !/^Q\d+$/.test(s) && s.length <= 60;
-  for (const k of kept) {
+  const nowYear = new Date().getUTCFullYear();
+  for (const k of [...kept, ...extraQs.map((q) => ({ q, birth: null, stints: [] }))]) {
     const n = names.get(k.q);
     if (!n) continue;
     const display = n.labels.en ?? n.labels.mul ?? n.labels.fr ?? Object.values(n.labels)[0];
@@ -268,11 +457,38 @@ async function main() {
     const alt = new Set([...Object.values(n.labels), ...n.aliases].filter(looksLikeName));
     alt.delete(display);
     const idx = players.length;
-    players.push({ q: k.q, n: display, ...(alt.size ? { a: [...alt] } : {}), s: n.sl, ...(k.birth ? { b: k.birth } : {}) });
+    const at = attrs.get(k.q);
+    const birth = k.birth ?? at?.birth;
+    // Nationality: senior national team first, then sporting nationality, then citizenships.
+    const nat = [...new Set([at?.nt, ...(at?.sportNat ?? []), ...(at?.nat ?? [])].filter(Boolean))];
+    const lastSeason = Math.max(-1, ...k.stints.map((s) => s.e ?? -1));
+    const active = !!at?.openSince && at.openSince >= nowYear - 6 && (!birth || nowYear - birth <= 41)
+      || (lastSeason >= CURRENT_SEASON && (!birth || nowYear - birth <= 41) && !(at && at.openSince === undefined && k.stints.every((s) => s.end)));
+    // Precomputed name keys (see worker/data.ts): full names/aliases, and surname forms.
+    const full = new Set();
+    const sur = new Set();
+    for (const nm of [display, ...alt]) {
+      const key = compact(nm.replace(/\(.*?\)/g, ''));
+      if (key.length >= 2) full.add(key);
+      for (const sk of surnameKeys(nm)) sur.add(sk);
+    }
+    for (const key of full) sur.delete(key);
+    players.push({
+      q: k.q, n: display, k: [...full], ...(sur.size ? { u: [...sur] } : {}), s: n.sl, ...(birth ? { b: birth } : {}),
+      ...(at?.pos.size ? { p: [...at.pos] } : {}),
+      ...(nat.length ? { c: nat } : {}),
+      ...(at?.nt ? { i: at.caps || 1 } : {}),
+      ...(at?.h ? { h: at.h } : {}),
+      ...(tournaments.has(k.q) ? { t: [...tournaments.get(k.q)].sort() } : {}),
+      ...(won.has(k.q) ? { w: [...won.get(k.q)].sort() } : {}),
+      ...(wiki?.ballonDor[k.q] ? { bd: wiki.ballonDor[k.q] } : {}),
+      ...(wiki?.topScorers[k.q] ? { ts: wiki.topScorers[k.q] } : {}),
+      ...(active ? { x: 1 } : {}),
+    });
     for (const s of k.stints) stints.push([idx, clubIdx.get(s.club), s.s ?? -1, s.e ?? -1, s.apps ?? -1]);
   }
   const out = {
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     firstSeason: FIRST_SEASON,
     currentSeason: CURRENT_SEASON,

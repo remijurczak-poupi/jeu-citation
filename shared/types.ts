@@ -3,12 +3,35 @@
 export type LeagueId = 'PL' | 'L1' | 'LL' | 'SA' | 'BL';
 
 /** A theme: players who match all the given filters. Seasons are start years (2007 = 2007-08). */
+export type Position = 'GK' | 'DF' | 'MF' | 'FW';
+/** Tournament codes: WC = World Cup, EU = Euro, CA = Copa América, optionally with the year (WC2006). */
+export type TournamentCode = string;
+
 export interface Criterion {
   league?: LeagueId;
   club?: string; // Wikidata id of the club
+  club2?: string; // must also have played for this club (any time)
   from?: number;
   to?: number;
+  position?: Position;
+  nationality?: string; // ISO 3166-1 alpha-2, or GB-ENG / GB-SCT / GB-WLS / GB-NIR
+  international?: boolean; // capped by a senior national team (true) or never (false)
+  active?: boolean; // still playing
+  ageMin?: number;
+  ageMax?: number;
+  heightMin?: number; // cm
+  heightMax?: number;
+  tournament?: TournamentCode;
+  tournamentWon?: boolean; // won that tournament
+  ucl?: 'played' | 'won'; // Champions League, with a club of the theme's scope, in a season of the theme's period
+  champion?: boolean; // league champion (of the theme's league if set)
+  topScorer?: boolean; // league top scorer (of the theme's league if set)
+  ballonDor?: boolean; // ranked in a Ballon d'Or vote
 }
+export const CRITERION_KEYS: (keyof Criterion)[] = [
+  'league', 'club', 'club2', 'from', 'to', 'position', 'nationality', 'international', 'active', 'ageMin', 'ageMax',
+  'heightMin', 'heightMax', 'tournament', 'tournamentWon', 'ucl', 'champion', 'topScorer', 'ballonDor',
+];
 
 export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'unlimited' | 'hardcore' | 'streak' | 'daily';
 
@@ -26,12 +49,15 @@ export const MODE_RULES: Record<SoloMode, { duration?: number; streakSeconds?: n
 
 /** l = seasons (start years) played in each league, since the first season of the dataset. */
 export interface MetaClub { q: string; n: string; nf?: string; l: Record<string, number[]> }
+export interface MetaTournament { code: string; years: number[] }
 export interface Meta {
   firstSeason: number;
   currentSeason: number;
   leagues: { id: LeagueId; name: { en: string; fr: string }; country: string }[];
   clubs: MetaClub[];
   playerCount: number;
+  nationalities: string[]; // codes present in the data, most frequent first
+  tournaments: MetaTournament[];
 }
 
 export interface Profile { pseudo: string; club: string; country: string }

@@ -2,8 +2,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, ApiError, getSession, setSession } from './api';
 import { useI18n } from './i18n';
-import { clubName, COUNTRIES, countryName, flag, seasonLabel } from './format';
-import type { Criterion, LeaderboardRow, LeagueId, Meta, Ranking, SoloMode } from '../shared/types';
+import { clubName, COUNTRIES, countryName, flag, leagueName, seasonLabel } from './format';
+import type { Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
 
 // ---------- Stadium curtain ----------
 /** One half of an illustrated (original, generic) stadium. The two halves meet on the halfway line. */
@@ -106,7 +106,7 @@ export function ThemePicker({ meta, value, onChange }: { meta: Meta; value: Crit
     setSize(null);
     const h = setTimeout(() => api.themeSize(value).then((r) => alive && setSize(r.size)).catch(() => {}), 250);
     return () => { alive = false; clearTimeout(h); };
-  }, [value.league, value.club, value.from, value.to]);
+  }, [JSON.stringify(value)]);
 
   const set = (patch: Partial<Criterion>) => {
     const next = { ...value, ...patch };
@@ -122,7 +122,7 @@ export function ThemePicker({ meta, value, onChange }: { meta: Meta; value: Crit
         <span>{t.league}</span>
         <select value={value.league ?? ''} onChange={(e) => set({ league: (e.target.value || undefined) as LeagueId | undefined })}>
           <option value="">{t.allLeagues}</option>
-          {meta.leagues.map((l) => <option key={l.id} value={l.id}>{flag(l.country === 'GB' ? 'GB' : l.country)} {l.name[lang]}</option>)}
+          {meta.leagues.map((l) => <option key={l.id} value={l.id}>{flag(l.country)} {leagueName(l, lang)}</option>)}
         </select>
       </label>
       <label>
@@ -147,9 +147,92 @@ export function ThemePicker({ meta, value, onChange }: { meta: Meta; value: Crit
           </select>
         </label>
       </div>
+      <MoreFilters meta={meta} value={value} set={set} clubs={clubs} />
       <p className={`theme-size ${size !== null && size < 15 ? 'bad' : ''}`}>
         {size === null ? '…' : size < 15 ? t.themeTooSmall : t.themeSize(size)}
       </p>
+    </div>
+  );
+}
+
+const EXTRA_KEYS: (keyof Criterion)[] = ['club2', 'position', 'nationality', 'international', 'active', 'ageMin', 'ageMax', 'heightMin', 'heightMax', 'tournament', 'ucl', 'champion', 'topScorer', 'ballonDor'];
+
+/** Optional filters, folded by default so the basic picker stays simple. */
+function MoreFilters({ meta, value, set, clubs }: { meta: Meta; value: Criterion; set: (p: Partial<Criterion>) => void; clubs: Meta['clubs'] }) {
+  const { t, lang } = useI18n();
+  const active = EXTRA_KEYS.filter((k) => value[k] !== undefined).length;
+  const [open, setOpen] = useState(active > 0);
+  const tri = (v: boolean | undefined) => (v === undefined ? '' : v ? 'yes' : 'no');
+  const fromTri = (s: string) => (s === '' ? undefined : s === 'yes');
+  const nats = useMemo(() => meta.nationalities.map((c) => ({ c, n: countryName(c, lang) })).sort((a, b) => a.n.localeCompare(b.n)), [meta, lang]);
+  const allClubs = useMemo(() => [...meta.clubs].sort((a, b) => clubName(meta, a.q, lang).localeCompare(clubName(meta, b.q, lang))), [meta, lang]);
+  const num = (s: string) => (s === '' ? undefined : +s);
+  if (!open) return <button type="button" className="link more" onClick={() => setOpen(true)}>+ {t.f.more}{active ? ` (${active})` : ''}</button>;
+  return (
+    <div className="more-filters">
+      <div className="row">
+        <label><span>{t.f.position}</span>
+          <select value={value.position ?? ''} onChange={(e) => set({ position: (e.target.value || undefined) as Position | undefined })}>
+            <option value="">{t.any}</option>
+            {(['GK', 'DF', 'MF', 'FW'] as Position[]).map((p) => <option key={p} value={p}>{t.f.positions[p]}</option>)}
+          </select>
+        </label>
+        <label><span>{t.f.nationality}</span>
+          <select value={value.nationality ?? ''} onChange={(e) => set({ nationality: e.target.value || undefined })}>
+            <option value="">{t.any}</option>
+            {nats.map(({ c, n }) => <option key={c} value={c}>{flag(c)} {n}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="row">
+        <label><span>{t.f.international}</span>
+          <select value={tri(value.international)} onChange={(e) => set({ international: fromTri(e.target.value) })}>
+            <option value="">{t.any}</option><option value="yes">{t.f.yes}</option><option value="no">{t.f.no}</option>
+          </select>
+        </label>
+        <label><span>{t.f.active}</span>
+          <select value={tri(value.active)} onChange={(e) => set({ active: fromTri(e.target.value) })}>
+            <option value="">{t.any}</option><option value="yes">{t.f.stillPlaying}</option><option value="no">{t.f.retired}</option>
+          </select>
+        </label>
+      </div>
+      <div className="row">
+        <label><span>{t.f.age} ({t.from})</span><input type="number" min={15} max={90} value={value.ageMin ?? ''} onChange={(e) => set({ ageMin: num(e.target.value) })} /></label>
+        <label><span>{t.f.age} ({t.to})</span><input type="number" min={15} max={90} value={value.ageMax ?? ''} onChange={(e) => set({ ageMax: num(e.target.value) })} /></label>
+      </div>
+      <div className="row">
+        <label><span>{t.f.height} ({t.from}, cm)</span><input type="number" min={150} max={215} value={value.heightMin ?? ''} onChange={(e) => set({ heightMin: num(e.target.value) })} /></label>
+        <label><span>{t.f.height} ({t.to}, cm)</span><input type="number" min={150} max={215} value={value.heightMax ?? ''} onChange={(e) => set({ heightMax: num(e.target.value) })} /></label>
+      </div>
+      <label><span>{t.f.tournament}</span>
+        <select value={value.tournament ?? ''} onChange={(e) => set({ tournament: e.target.value || undefined, tournamentWon: e.target.value ? value.tournamentWon : undefined })}>
+          <option value="">{t.any}</option>
+          {meta.tournaments.map((tr) => (
+            <optgroup key={tr.code} label={t.f.tournaments[tr.code] ?? tr.code}>
+              <option value={tr.code}>{t.f.tournaments[tr.code] ?? tr.code} · {t.f.anyEdition}</option>
+              {tr.years.map((y) => <option key={y} value={tr.code + y}>{t.f.tournaments[tr.code] ?? tr.code} {y}</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      {value.tournament && (
+        <label className="check"><input type="checkbox" checked={!!value.tournamentWon} onChange={(e) => set({ tournamentWon: e.target.checked || undefined })} /> {t.f.wonIt}</label>
+      )}
+      <label><span>{t.f.ucl}</span>
+        <select value={value.ucl ?? ''} onChange={(e) => set({ ucl: (e.target.value || undefined) as Criterion['ucl'] })}>
+          <option value="">{t.any}</option><option value="played">{t.f.uclPlayed}</option><option value="won">{t.f.uclWon}</option>
+        </select>
+      </label>
+      <label className="check"><input type="checkbox" checked={!!value.champion} onChange={(e) => set({ champion: e.target.checked || undefined })} /> {t.f.champion}</label>
+      <label className="check"><input type="checkbox" checked={!!value.topScorer} onChange={(e) => set({ topScorer: e.target.checked || undefined })} /> {t.f.topScorer}</label>
+      <label className="check"><input type="checkbox" checked={!!value.ballonDor} onChange={(e) => set({ ballonDor: e.target.checked || undefined })} /> {t.f.ballonDor}</label>
+      <label><span>{t.f.club2}</span>
+        <select value={value.club2 ?? ''} onChange={(e) => set({ club2: e.target.value || undefined })}>
+          <option value="">{t.any}</option>
+          {allClubs.filter((c) => c.q !== value.club).map((c) => <option key={c.q} value={c.q}>{clubName(meta, c.q, lang)}</option>)}
+        </select>
+      </label>
+      {void clubs}
     </div>
   );
 }

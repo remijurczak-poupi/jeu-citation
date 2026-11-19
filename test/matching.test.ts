@@ -91,3 +91,29 @@ describe('rarity', () => {
     expect(t.get('MID')).toBe(2);
   });
 });
+
+describe('extra filters', () => {
+  const has = (c: Criterion, name: string) => guess(c, name).status === 'ok';
+  it('position and nationality', () => {
+    expect(has({ league: 'PL', position: 'GK' }, 'Petr Čech')).toBe(true);
+    expect(has({ league: 'PL', position: 'GK' }, 'Thierry Henry')).toBe(false);
+    expect(has({ league: 'PL', nationality: 'FR' }, 'Thierry Henry')).toBe(true);
+    expect(has({ league: 'PL', nationality: 'GB-ENG' }, 'Steven Gerrard')).toBe(true);
+  });
+  it('international and two clubs', () => {
+    expect(has({ club: q('Arsenal F.C.'), international: true }, 'Thierry Henry')).toBe(true);
+    expect(has({ club: q('Arsenal F.C.'), club2: q('FC Barcelona') }, 'Thierry Henry')).toBe(true);
+    expect(has({ club: q('Arsenal F.C.'), club2: q('FC Barcelona') }, 'Dennis Bergkamp')).toBe(false);
+  });
+  it('tournaments alone are not limited to the big leagues', () => {
+    expect(has({ tournament: 'WC2010' }, 'Diego Forlán')).toBe(true);
+    expect(has({ tournament: 'WC2018', tournamentWon: true }, 'Kylian Mbappé')).toBe(true);
+    expect(has({ tournament: 'WC2018', tournamentWon: true }, 'Luka Modrić')).toBe(false);
+  });
+  it('trophies', () => {
+    expect(has({ club: q('Liverpool F.C.'), ucl: 'won' }, 'Steven Gerrard')).toBe(true);
+    expect(has({ league: 'PL', champion: true }, 'Steven Gerrard')).toBe(false);
+    expect(has({ league: 'PL', champion: true }, 'Frank Lampard')).toBe(true);
+    expect(has({ ballonDor: true }, 'Lionel Messi')).toBe(true);
+  });
+});
