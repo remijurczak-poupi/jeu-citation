@@ -2,7 +2,7 @@
 
 Football quiz: name as many footballers as you can for a theme (league, club, seasons).
 Solo modes, a daily challenge, leaderboards, and private rooms to play Bomb and Duel with friends.
-English by default, French available.
+English by default, also in French, German, Spanish, Italian and Portuguese.
 
 ## Stack
 
@@ -10,16 +10,27 @@ English by default, French available.
 - **API**: Cloudflare Worker with Hono (`worker/`).
 - **Database**: Cloudflare D1 (SQLite): profiles, games, scores, citation counts (`migrations/`).
 - **Rooms**: one Durable Object per room code acts as referee (`worker/room.ts`).
-- **Data**: built from Wikidata (CC0) by `scripts/build-data.mjs` into `src/data/football.json`, bundled with the Worker.
+- **Data**: built from Wikidata (CC0) and English Wikipedia (CC BY-SA 4.0, credited in the footer) by `scripts/build-wiki.mjs` and `scripts/build-data.mjs` into `src/data/football.json`, bundled with the Worker.
 
 ## Data
 
-`npm run data` queries Wikidata and rebuilds `src/data/football.json` (raw answers are cached in `.cache/`, add `--refresh` to refetch).
+Two steps:
+
+1. `NODE_USE_ENV_PROXY=1 node scripts/build-wiki.mjs` reads English Wikipedia into `scripts/wiki-data.json` (committed): squads of every World Cup since 1998, Euro since 2000 and Copa América since 2001, Champions League clubs per season since 2000-01, Ballon d'Or rankings and league top scorers. The Wikipedia API rate-limits hard, so requests are throttled and cached in `.cache/wiki/`.
+2. `npm run data` queries Wikidata and rebuilds `src/data/football.json` (raw answers are cached in `.cache/`, add `--refresh` to refetch).
 
 - Players: everyone with at least one season since 2000-01 at a club that was then in the Premier League, Ligue 1, La Liga, Serie A or Bundesliga.
 - League membership is **per season**: a club counts for a league only in the seasons it played in it (Wikidata league season items, property P1923). Seasons missing or wrong in Wikidata are filled by hand in `scripts/season-overrides.json`. The build warns if a season does not have 18 or 20 clubs.
 - The ongoing season uses each league's current members on Wikidata.
 - A season is named by its start year: 2007 = 2007-08.
+- Since 2020 Wikidata lists some seasons with "men's team" items instead of clubs: they are mapped to their parent club (P361).
+- Player attributes: positions, nationalities (national team played for, else sporting nationality, else citizenship; England/Scotland/Wales/Northern Ireland are separate), caps, height, birth date, still active.
+- Trophies: league and Champions League winners up to 2024-25 are in `scripts/titles.json` (Wikidata is patchy there), later seasons come from Wikidata. Tournament winners are hardcoded in `build-wiki.mjs` except the 2026 World Cup (Wikidata). Bundesliga top scorers are hardcoded too.
+- "Played the Champions League" means being at a top-5 club during a season it was in the group stage or league phase: a squad approximation, not minutes played.
+
+## Theme filters
+
+League, club, seasons, plus: position, nationality, international, age, height, still active, tournament played or won (World Cup, Euro, Copa América), Champions League played or won, league champion, league top scorer, ranked in the Ballon d'Or, and "also played for" a second club.
 
 ## Answer matching (`worker/data.ts`, `worker/normalize.ts`)
 

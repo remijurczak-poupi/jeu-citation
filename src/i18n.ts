@@ -1,7 +1,12 @@
 // English by default (football culture is mostly English-speaking), French available.
 import { createContext, useContext } from 'react';
+import { de, es, it, pt } from './i18n-more';
 
-export type Lang = 'en' | 'fr';
+export type Lang = 'en' | 'fr' | 'de' | 'es' | 'it' | 'pt';
+export const LANGS: { id: Lang; label: string }[] = [
+  { id: 'en', label: 'English' }, { id: 'fr', label: 'Français' }, { id: 'de', label: 'Deutsch' },
+  { id: 'es', label: 'Español' }, { id: 'it', label: 'Italiano' }, { id: 'pt', label: 'Português' },
+];
 
 const en = {
   appName: 'Name the Players',
@@ -116,9 +121,39 @@ const en = {
     rematch: 'Rematch',
     changeTheme: 'Change theme',
   },
+  since: (s: string) => `since ${s}`,
+  f: {
+    more: 'More filters',
+    position: 'Position',
+    positions: { GK: 'Goalkeeper', DF: 'Defender', MF: 'Midfielder', FW: 'Forward' } as Record<string, string>,
+    positionsPlural: { GK: 'Goalkeepers', DF: 'Defenders', MF: 'Midfielders', FW: 'Forwards' } as Record<string, string>,
+    nationality: 'Nationality',
+    international: 'International',
+    internationals: 'Internationals',
+    neverCapped: 'Never capped',
+    yes: 'Yes',
+    no: 'No',
+    active: 'Career',
+    stillPlaying: 'Still playing',
+    retired: 'Retired',
+    age: 'Age',
+    height: 'Height',
+    tournament: 'Tournament played',
+    tournaments: { WC: 'World Cup', EU: 'Euro', CA: 'Copa América' } as Record<string, string>,
+    anyEdition: 'any edition',
+    wonIt: 'Won it',
+    winnersOf: 'Winners of',
+    ucl: 'Champions League',
+    uclPlayed: 'Played the Champions League',
+    uclWon: 'Won the Champions League',
+    champion: 'League champion',
+    topScorer: 'League top scorer',
+    ballonDor: "Ballon d'Or ranked",
+    club2: 'Also played for',
+  },
   settings: 'Settings',
   language: 'Language',
-  dataCredit: 'Player data: Wikidata (CC0). Top 5 European leagues since 2000-01.',
+  dataCredit: 'Player data: Wikidata (CC0) and Wikipedia (CC BY-SA). Top 5 European leagues since 2000-01.',
   shareText: (p: { title: string; theme: string; count: number; rank?: number; total?: number; url: string }) =>
     `⚽ ${p.title}\n${p.theme}\n✅ ${p.count} players named${p.rank ? `\n🏆 #${p.rank} of ${p.total}` : ''}\n${p.url}`,
 };
@@ -237,21 +272,62 @@ const fr: Dict = {
     rematch: 'Revanche',
     changeTheme: 'Changer de thème',
   },
+  since: (s: string) => `depuis ${s}`,
+  f: {
+    more: 'Plus de filtres',
+    position: 'Poste',
+    positions: { GK: 'Gardien', DF: 'Défenseur', MF: 'Milieu', FW: 'Attaquant' },
+    positionsPlural: { GK: 'Gardiens', DF: 'Défenseurs', MF: 'Milieux', FW: 'Attaquants' },
+    nationality: 'Nationalité',
+    international: 'International',
+    internationals: 'Internationaux',
+    neverCapped: 'Jamais sélectionnés',
+    yes: 'Oui',
+    no: 'Non',
+    active: 'Carrière',
+    stillPlaying: 'En activité',
+    retired: 'Retraités',
+    age: 'Âge',
+    height: 'Taille',
+    tournament: 'Tournoi disputé',
+    tournaments: { WC: 'Coupe du monde', EU: 'Euro', CA: 'Copa América' },
+    anyEdition: 'toutes éditions',
+    wonIt: "L'a gagné",
+    winnersOf: 'Vainqueurs',
+    ucl: 'Ligue des champions',
+    uclPlayed: 'A joué la Ligue des champions',
+    uclWon: 'A gagné la Ligue des champions',
+    champion: 'Champion du championnat',
+    topScorer: 'Meilleur buteur du championnat',
+    ballonDor: "Classé au Ballon d'Or",
+    club2: 'A aussi joué pour',
+  },
   settings: 'Réglages',
   language: 'Langue',
-  dataCredit: 'Données joueurs : Wikidata (CC0). 5 grands championnats européens depuis 2000-01.',
+  dataCredit: 'Données joueurs : Wikidata (CC0) et Wikipédia (CC BY-SA). 5 grands championnats européens depuis 2000-01.',
   shareText: (p) => `⚽ ${p.title}\n${p.theme}\n✅ ${p.count} joueurs cités${p.rank ? `\n🏆 ${p.rank}e sur ${p.total}` : ''}\n${p.url}`,
 };
 
-export const dictionaries: Record<Lang, Dict> = { en, fr };
+function merge<X>(base: X, patch: unknown): X {
+  if (!patch || typeof patch !== 'object' || typeof base !== 'object' || base === null) return (patch ?? base) as X;
+  const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
+    const b = (base as Record<string, unknown>)[k];
+    out[k] = v && typeof v === 'object' && !Array.isArray(v) && typeof b === 'object' ? merge(b, v) : v;
+  }
+  return out as X;
+}
+
+export const dictionaries: Record<Lang, Dict> = { en, fr, de: merge(en, de), es: merge(en, es), it: merge(en, it), pt: merge(en, pt) };
 export type T = Dict;
 
 export function initialLang(): Lang {
   try {
     const saved = localStorage.getItem('lang');
-    if (saved === 'en' || saved === 'fr') return saved;
+    if (LANGS.some((l) => l.id === saved)) return saved as Lang;
   } catch { /* storage unavailable */ }
-  return navigator.language?.toLowerCase().startsWith('fr') ? 'fr' : 'en';
+  const nav = (navigator.language ?? 'en').slice(0, 2).toLowerCase();
+  return (LANGS.find((l) => l.id === nav)?.id ?? 'en') as Lang;
 }
 
 export const I18n = createContext<{ lang: Lang; t: Dict; setLang: (l: Lang) => void }>({ lang: 'en', t: en, setLang: () => {} });

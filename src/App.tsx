@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, getSession } from './api';
-import { dictionaries, I18n, initialLang, useI18n, type Lang } from './i18n';
+import { dictionaries, I18n, initialLang, LANGS, useI18n, type Lang } from './i18n';
 import { themeLabel } from './format';
 import { Leaderboard, ProfileForm, Silhouette, StadiumCurtain, ThemePicker, type CurtainState } from './ui';
 import { GameScreen } from './screens/Game';
@@ -68,7 +68,9 @@ export default function App() {
         <nav>
           <a href="#/leaderboards" title={i18n.t.leaderboards}>🏆</a>
           {hasProfile && <a href="#/profile" title={i18n.t.profileTitle}>👤</a>}
-          <button className="lang" onClick={() => setLang(lang === 'en' ? 'fr' : 'en')}>{lang === 'en' ? 'FR' : 'EN'}</button>
+          <select className="lang" value={lang} onChange={(e) => setLang(e.target.value as Lang)} aria-label={i18n.t.language}>
+            {LANGS.map((l) => <option key={l.id} value={l.id}>{l.id.toUpperCase()}</option>)}
+          </select>
         </nav>
       </header>
       <main>{screen}</main>

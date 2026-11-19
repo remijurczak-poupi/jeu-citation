@@ -69,7 +69,11 @@ button.primary:hover:not(:disabled) { background: #f2d24a; }
 button.big { width: 100%; padding: 16px; font-family: var(--font-display); font-size: 26px; letter-spacing: 0.05em; }
 button.link { background: none; border: none; color: var(--muted); text-decoration: underline; padding: 6px; }
 button.link.danger { color: var(--bad); align-self: center; }
-button.lang { padding: 6px 10px; font-size: 13px; }
+select.lang { width: auto; padding: 6px 8px; font-size: 13px; font-weight: 700; border-radius: 10px; }
+button.link.more { align-self: flex-start; padding: 4px 0 12px; }
+.more-filters { border-top: 1px dashed var(--line); padding-top: 12px; margin-bottom: 8px; }
+label.check { flex-direction: row; align-items: center; gap: 10px; color: var(--text); font-size: 14px; }
+label.check input { width: 20px; height: 20px; accent-color: var(--accent); }
 
 input, select {
   width: 100%; font: inherit; color: var(--text); background: #08180f; border: 1px solid var(--line);

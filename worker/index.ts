@@ -48,7 +48,7 @@ function checkPseudo(raw: unknown): string | null {
 }
 const pseudoNorm = (p: string) => p.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
 const validClub = (c: unknown) => typeof c === 'string' && (c === 'other' || data.clubs.some((x) => x.q === c));
-const validCountry = (c: unknown) => typeof c === 'string' && /^[A-Z]{2}$/.test(c);
+const validCountry = (c: unknown) => typeof c === 'string' && /^([A-Z]{2}|GB-(ENG|SCT|WLS|NIR))$/.test(c);
 
 async function auth(env: Env, id?: string | null, secret?: string | null): Promise<Me | null> {
   if (!id || !secret) return null;
@@ -77,13 +77,8 @@ app.onError((err, c) => {
 });
 
 function parseCriterion(raw: unknown): Criterion {
-  const r = (raw ?? {}) as Record<string, unknown>;
-  return normalizeCriterion({
-    league: typeof r.league === 'string' ? (r.league as Criterion['league']) : undefined,
-    club: typeof r.club === 'string' ? r.club : undefined,
-    from: Number.isInteger(r.from) ? (r.from as number) : r.from ? Number(r.from) || undefined : undefined,
-    to: Number.isInteger(r.to) ? (r.to as number) : r.to ? Number(r.to) || undefined : undefined,
-  });
+  // normalizeCriterion validates every field (values may be strings when they come from a query string).
+  return normalizeCriterion((raw ?? {}) as Criterion);
 }
 
 // ---------- meta ----------
@@ -95,6 +90,19 @@ app.get('/api/meta', (c) => {
     leagues: data.leagues.map(({ id, name, country }) => ({ id, name, country })),
     clubs: data.clubs.map(({ q, n, nf, l }) => ({ q, n, ...(nf ? { nf } : {}), l })),
     playerCount: data.players.length,
+    nationalities: (() => {
+      const count = new Map<string, number>();
+      for (const p of data.players) for (const c of p.c ?? []) count.set(c, (count.get(c) ?? 0) + 1);
+      return [...count].filter(([, n]) => n >= 15).sort((a, b) => b[1] - a[1]).map(([c]) => c);
+    })(),
+    tournaments: (() => {
+      const years = new Map<string, Set<number>>();
+      for (const p of data.players) for (const t of p.t ?? []) {
+        const code = t.slice(0, 2);
+        (years.get(code) ?? years.set(code, new Set()).get(code)!).add(+t.slice(2));
+      }
+      return [...years].map(([code, ys]) => ({ code, years: [...ys].sort((a, b) => a - b) }));
+    })(),
   };
   c.header('Cache-Control', 'public, max-age=3600');
   return c.json(metaCache);
