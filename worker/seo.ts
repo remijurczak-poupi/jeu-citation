@@ -13,7 +13,7 @@ export const BRAND = 'Name the Players';
 
 /** Minimum players for a club page / club pair page to exist (fewer = thin page, not worth indexing). */
 export const MIN_CLUB_PLAYERS = 30;
-export const MIN_PAIR_PLAYERS = 10;
+export const MIN_PAIR_PLAYERS = 15; // = the smallest theme the game accepts (MIN_THEME_SIZE)
 
 // ---------- names and slugs ----------
 
