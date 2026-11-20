@@ -371,7 +371,17 @@ function merge<X>(base: X, patch: unknown): X {
 export const dictionaries: Record<Lang, Dict> = { en, fr, de: merge(en, de), es: merge(en, es), it: merge(en, it), pt: merge(en, pt) };
 export type T = Dict;
 
+/** Language of the page's URL (/fr/…, /de/…), set by the server-rendered pages. */
+export function urlLang(): Lang | null {
+  const fromSeo = (window as { __SEO__?: { lang?: string } }).__SEO__?.lang;
+  const fromPath = location.pathname.match(/^\/(fr|de|es|it|pt)(\/|$)/)?.[1];
+  const l = fromSeo ?? fromPath;
+  return LANGS.some((x) => x.id === l) ? (l as Lang) : null;
+}
+
 export function initialLang(): Lang {
+  const fromUrl = urlLang();
+  if (fromUrl && fromUrl !== 'en') return fromUrl;
   try {
     const saved = localStorage.getItem('lang');
     if (LANGS.some((l) => l.id === saved)) return saved as Lang;

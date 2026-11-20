@@ -71,6 +71,18 @@ Daily challenge leaderboards: number of players named, and **rarity points** (1 
 
 No account: a nickname, a supported club and a country, tied to the device. The device secret is shown once as a recovery code to restore the profile on another device.
 
+## Search engines (`worker/seo.ts`)
+
+The Worker renders the pages Google indexes, in 6 languages (English at `/`, others under `/fr/`, `/de/`, `/es/`, `/it/`, `/pt/`):
+
+- `/` home, `/quiz` all clubs, `/quiz/<club>` every player of a club since 2000,
+- `/quiz/<club-a>/<club-b>` players who played for both clubs (slugs in alphabetical order, the other order redirects; only pairs with 15+ players, the smallest theme a game accepts),
+- `/league/<league>` and `/league/<league>/<season>` (e.g. `/league/serie-a/2005-06`).
+
+Each page is the normal app plus a server-rendered section below it (title, description, canonical, hreflang, Open Graph, breadcrumb JSON-LD, facts, links to related quizzes). "Play this quiz" opens the solo setup with the theme preset (`#/solo?c=…`). `/robots.txt`, `/sitemap.xml` (index) and `/sitemap-<lang>.xml` are generated from the data. API responses are `noindex`.
+
+Once the domain is chosen, set `CANONICAL_ORIGIN` in `wrangler.jsonc`: other hosts (workers.dev, previews) then answer `noindex` and point their canonical URLs to the real domain. The brand in page titles is `BRAND` in `worker/seo.ts`.
+
 ## Develop
 
 ```bash

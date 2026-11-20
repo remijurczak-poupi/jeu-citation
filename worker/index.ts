@@ -6,6 +6,8 @@ import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type G
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
+import { renderPage, robotsTxt, route, sitemap, sitemapIndex } from './seo';
+import { SEO_LANGS, type SeoLang } from './seo-text';
 import type { WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
 import { MODE_RULES } from '../shared/types';
 
@@ -15,6 +17,9 @@ interface Env {
   DB: D1Database;
   ROOMS: DurableObjectNamespace;
   ASSETS: Fetcher;
+  /** Public address of the site, e.g. https://example.com. Set it once the domain is chosen: other hosts
+   * (workers.dev, previews) then answer "noindex" and point their canonical URLs to it. */
+  CANONICAL_ORIGIN?: string;
 }
 interface Me { id: string; pseudo: string; club: string; country: string }
 type C = Context<{ Bindings: Env; Variables: { me: Me | null } }>;
@@ -60,6 +65,7 @@ async function auth(env: Env, id?: string | null, secret?: string | null): Promi
 }
 
 app.use('/api/*', async (c, next) => {
+  c.header('X-Robots-Tag', 'noindex');
   c.set('me', await auth(c.env, c.req.header('x-device-id'), c.req.header('x-device-secret')));
   await next();
 });
@@ -408,5 +414,43 @@ app.get('/api/rooms/:code', async (c) => {
 });
 
 app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404));
+
+// ---------- pages for search engines ----------
+// wrangler.jsonc (run_worker_first) sends only these paths here; everything else is served from the assets.
+let shell: string | null = null;
+async function appShell(c: C): Promise<string> {
+  if (!shell) shell = await (await c.env.ASSETS.fetch(new Request(new URL('/', c.req.url)))).text();
+  return shell;
+}
+function origins(c: C) {
+  const origin = new URL(c.req.url).origin;
+  const canonicalOrigin = c.env.CANONICAL_ORIGIN?.replace(/\/+$/, '') || origin;
+  return { origin, canonicalOrigin, preview: canonicalOrigin !== origin };
+}
+const PAGE_CACHE = 'public, max-age=600';
+
+app.get('/robots.txt', (c) => {
+  const { canonicalOrigin } = origins(c);
+  c.header('Cache-Control', 'public, max-age=86400');
+  return c.text(robotsTxt(canonicalOrigin));
+});
+
+app.get('*', async (c) => {
+  const url = new URL(c.req.url);
+  const { origin, canonicalOrigin, preview } = origins(c);
+  if (preview) c.header('X-Robots-Tag', 'noindex');
+  const xml = (body: string) => { c.header('Cache-Control', 'public, max-age=3600'); return c.body(body, 200, { 'Content-Type': 'application/xml; charset=utf-8' }); };
+  if (url.pathname === '/sitemap.xml') return xml(sitemapIndex(canonicalOrigin));
+  const sm = url.pathname.match(/^\/sitemap-([a-z]{2})\.xml$/);
+  if (sm && SEO_LANGS.includes(sm[1] as SeoLang)) return xml(sitemap(canonicalOrigin, sm[1] as SeoLang));
+
+  const r = route(url.pathname);
+  if (!r) return c.env.ASSETS.fetch(c.req.raw);
+  if ('redirect' in r) return c.redirect(r.redirect + url.search, 301);
+  const template = await appShell(c);
+  c.header('Cache-Control', PAGE_CACHE);
+  if ('notFound' in r) return c.html(renderPage(template, r.notFound, { kind: 'home' }, { origin, canonicalOrigin, noindex: true }), 404);
+  return c.html(renderPage(template, r.lang, r.page, { origin, canonicalOrigin, noindex: preview }));
+});
 
 export default app;
