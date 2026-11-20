@@ -82,6 +82,15 @@ npm test
 
 ## Deploy (Cloudflare)
 
+**From GitHub (recommended)**: `.github/workflows/deploy.yml` deploys on every push to `main` or `preview`, or by hand from the Actions tab. It creates the D1 database on the first run, applies the migrations, builds and deploys. It needs two repository secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`: shown on the Cloudflare dashboard (Workers & Pages, right column).
+- `CLOUDFLARE_API_TOKEN`: My Profile → API Tokens → Create Token → "Edit Cloudflare Workers" template, then add the permission Account → D1 → Edit.
+
+The site is served at `https://name-the-players.<your-subdomain>.workers.dev`. A new account must open Workers & Pages once to pick its workers.dev subdomain.
+
+**From your computer**:
+
 ```bash
 npx wrangler login
 npx wrangler d1 create name-the-players   # copy the database_id into wrangler.jsonc
@@ -89,4 +98,4 @@ npm run db:migrate:remote
 npm run deploy
 ```
 
-The Workers Paid plan ($5/month) is recommended for launch: the free plan's 10 ms CPU limit per request is too tight for name matching on large themes.
+The free plan allows 100,000 requests a day and 10 ms of CPU per request. Name matching on the largest themes is close to that limit: if answers start failing, move to the Workers Paid plan ($5/month).
