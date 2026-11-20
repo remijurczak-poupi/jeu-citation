@@ -4,9 +4,18 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-11-01",
   "assets": {
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    // The Worker renders the pages search engines index (home, /quiz, /league, /fr/…), robots.txt and sitemaps.
+    "run_worker_first": [
+      "/api/*", "/", "/robots.txt", "/sitemap.xml",
+      "/sitemap-en.xml", "/sitemap-fr.xml", "/sitemap-de.xml", "/sitemap-es.xml", "/sitemap-it.xml", "/sitemap-pt.xml",
+      "/quiz", "/quiz/*", "/league/*",
+      "/fr", "/fr/*", "/de", "/de/*", "/es", "/es/*", "/it", "/it/*", "/pt", "/pt/*"
+    ]
   },
+  // Uncomment once the domain is chosen: other hosts (workers.dev, previews) are then kept out of Google.
+  // "vars": { "CANONICAL_ORIGIN": "https://example.com" },
   "d1_databases": [
     {
       "binding": "DB",

@@ -8,10 +8,16 @@ import { RoomScreen, RoomHome } from './screens/Room';
 import type { Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
 
 // ---------- tiny hash router ----------
+// Server-rendered quiz pages (/quiz/arsenal, /fr/league/serie-a…) describe themselves in window.__SEO__.
+interface SeoInfo { lang: Lang; criterion: Criterion | null; alt: Record<Lang, string> }
+const SEO = (window as { __SEO__?: SeoInfo }).__SEO__;
+/** A quiz page without a hash opens the solo setup with its theme. */
+const defaultRoute = () => (SEO?.criterion ? `/solo?c=${encodeURIComponent(JSON.stringify(SEO.criterion))}` : '/');
+
 function useRoute() {
-  const [hash, setHash] = useState(() => location.hash.slice(1) || '/');
+  const [hash, setHash] = useState(() => location.hash.slice(1) || defaultRoute());
   useEffect(() => {
-    const on = () => setHash(location.hash.slice(1) || '/');
+    const on = () => setHash(location.hash.slice(1) || defaultRoute());
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);
@@ -22,7 +28,12 @@ export interface Nav { go: (path: string) => void }
 
 export default function App() {
   const [lang, setLangState] = useState<Lang>(initialLang);
-  const setLang = (l: Lang) => { setLangState(l); try { localStorage.setItem('lang', l); } catch { /* ignore */ } };
+  const setLang = (l: Lang) => {
+    try { localStorage.setItem('lang', l); } catch { /* ignore */ }
+    // On a page that exists in every language, go to its version in that language (own URL, own content).
+    if (SEO && SEO.alt[l] && l !== SEO.lang) { location.href = SEO.alt[l] + location.hash; return; }
+    setLangState(l);
+  };
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   const i18n = useMemo(() => ({ lang, t: dictionaries[lang], setLang }), [lang]);
 
@@ -48,13 +59,15 @@ export default function App() {
   }, [route]);
 
   const nav: Nav = { go: useCallback((p: string) => { location.hash = p; }, []) };
-  const parts = shown.split('/').filter(Boolean);
+  const [shownPath, shownQuery = ''] = shown.split('?');
+  const parts = shownPath.split('/').filter(Boolean);
+  const preset = (() => { try { return JSON.parse(new URLSearchParams(shownQuery).get('c') ?? 'null') as Criterion | null; } catch { return null; } })();
 
   let screen;
   if (!meta) screen = null;
   else if (!hasProfile) screen = <div className="page narrow"><ProfileForm meta={meta} onDone={() => setHasProfile(true)} /></div>;
   else if (parts[0] === 'game' && parts[1]) screen = <GameScreen id={parts[1]} meta={meta} nav={nav} />;
-  else if (parts[0] === 'solo') screen = <SoloSetup meta={meta} nav={nav} />;
+  else if (parts[0] === 'solo') screen = <SoloSetup key={shownQuery} meta={meta} nav={nav} preset={preset} />;
   else if (parts[0] === 'room' && parts[1]) screen = <RoomScreen code={parts[1].toUpperCase()} meta={meta} nav={nav} />;
   else if (parts[0] === 'room') screen = <RoomHome meta={meta} nav={nav} />;
   else if (parts[0] === 'leaderboards') screen = <Leaderboards meta={meta} />;
@@ -157,10 +170,10 @@ function Home({ meta, nav }: { meta: Meta; nav: Nav }) {
 
 // ---------- Solo setup ----------
 const SOLO: SoloMode[] = ['timed1', 'timed3', 'timed10', 'unlimited', 'hardcore', 'streak', 'chain'];
-function SoloSetup({ meta, nav }: { meta: Meta; nav: Nav }) {
+function SoloSetup({ meta, nav, preset }: { meta: Meta; nav: Nav; preset?: Criterion | null }) {
   const { t } = useI18n();
   const [mode, setMode] = useState<SoloMode>('timed3');
-  const [criterion, setCriterion] = useState<Criterion>({});
+  const [criterion, setCriterion] = useState<Criterion>(() => (preset && typeof preset === 'object' ? preset : {}));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const start = async () => {

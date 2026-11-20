@@ -229,3 +229,15 @@ label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; fo
 .royale-score { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .royale-score strong { color: var(--accent); font-size: 18px; }
 .royale-score small { color: var(--muted); }
+
+/* Server-rendered quiz pages (worker/seo.ts): real content below the app, for readers and search engines. */
+.seo { border-top: 1px solid var(--line); background: var(--bg2); }
+.seo-inner { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.seo h1 { color: var(--text); font-size: 28px; }
+.seo h2 { color: var(--text); font-size: 20px; margin-top: 20px; }
+.seo a { color: var(--accent); }
+.seo-crumbs { font-size: 12px; margin-bottom: 8px; }
+.seo-facts { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; list-style: none; }
+.seo-facts li { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+.seo-links { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0; list-style: none; }
+.seo-play { display: inline-block; background: var(--accent); color: var(--accent-ink) !important; font-weight: 800; text-decoration: none; padding: 10px 18px; border-radius: 999px; }
