@@ -1,6 +1,6 @@
 // Football dataset (built from Wikidata by scripts/build-data.mjs) and theme ("criterion") logic.
 import raw from '../src/data/football.json';
-import { boundedDistance, compact, surnameKeys, tolerance } from './normalize';
+import { boundedDistance, compact, normalize, surnameKeys, tolerance } from './normalize';
 import { RANKED_THEMES } from '../shared/types';
 import type { Criterion, LeagueId, Position, Suggestion } from '../shared/types';
 
@@ -241,6 +241,24 @@ function buildIndex(): Index {
   return { full, sur, byLen };
 }
 const index: Index = buildIndex();
+
+/** Words of a name, normalized ("Benjamin André" → ["benjamin", "andre"]). */
+const wordsOf = (n: string) => normalize(n.replace(/\(.*?\)/g, '')).split(' ').filter(Boolean);
+/** Same name in any word order: "André Benjamin" and "Benjamin André" share this key. */
+const orderFreeKey = (words: string[]) => [...words].sort().join(' ');
+let orderFree: Map<string, number[]> | null = null;
+function orderFreeIndex() {
+  if (orderFree) return orderFree;
+  orderFree = new Map();
+  data.players.forEach((pl, p) => {
+    const w = wordsOf(pl.n);
+    if (w.length < 2) return;
+    const k = orderFreeKey(w);
+    const arr = orderFree!.get(k);
+    if (arr) arr.push(p); else orderFree!.set(k, [p]);
+  });
+  return orderFree;
+}
 prepare();
 
 const matcherCache = new Map<string, Matcher>();
@@ -287,8 +305,10 @@ export function matchGuess(m: Matcher, input: string, cited: Set<number>, strict
   if (k.length < 2 || k.length > 60) return { status: 'invalid' };
   const scope = m.scope.players;
   const inScope = (ps: number[] | undefined) => (ps ?? []).filter((p) => scope.has(p));
+  const words = normalize(input).split(' ').filter(Boolean);
   const stages: (() => number[])[] = [
     () => inScope(index.full.get(k)),
+    () => (words.length >= 2 ? inScope(orderFreeIndex().get(orderFreeKey(words))) : []),
     () => inScope(index.sur.get(k)),
     () => fuzzy(scope, k, false, strict),
     () => fuzzy(scope, k, true, strict),
@@ -301,7 +321,7 @@ export function matchGuess(m: Matcher, input: string, cited: Set<number>, strict
     if (!fresh.length) return { status: 'duplicate', player: sorted[0] };
     // A bare surname shared by players of similar fame ("Fofana"): ask which one instead of guessing.
     // The options come from the whole base, so the question reveals nothing about the theme.
-    if (i === 1 && fresh.length > 1 && data.players[fresh[1]].s * 2 >= data.players[fresh[0]].s) {
+    if (i === 2 && fresh.length > 1 && data.players[fresh[1]].s * 2 >= data.players[fresh[0]].s) {
       const options = [...(index.sur.get(k) ?? [])].sort((a, b) => data.players[b].s - data.players[a].s).slice(0, 8);
       return { status: 'ambiguous', options };
     }
@@ -328,7 +348,29 @@ export function playerIndex(q: string): number | undefined {
 
 // ---------- Suggestions while typing ----------
 let prefixKeys: { k: string; p: number }[] | null = null;
-/** Players of the whole base whose full name or surname starts with the input (3 letters or more), most famous first. */
+let wordKeys: { w: string; p: number }[] | null = null;
+let playerWords: string[][] | null = null;
+function lowerBound<T extends { k?: string; w?: string }>(arr: T[], key: string, get: (x: T) => string) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (get(arr[mid]) < key) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+/** Every typed word starts a different word of the name, in any order. */
+function wordsMatch(typed: string[], name: string[]) {
+  const used = new Set<number>();
+  // Longest typed words first, so "an" doesn't take the word "andre" needed by "andre".
+  for (const t of [...typed].sort((a, b) => b.length - a.length)) {
+    const i = name.findIndex((w, j) => !used.has(j) && w.startsWith(t));
+    if (i < 0) return false;
+    used.add(i);
+  }
+  return true;
+}
+/**
+ * Players of the whole base whose name matches the input (3 letters or more): full name or surname
+ * starting with it, or every typed word starting a word of the name in any order ("andre benj" finds
+ * Benjamin André). Players whose surname matches come first, then by fame.
+ */
 export function suggest(input: string, limit = 8): number[] {
   const k = compact(input);
   if (k.length < 3 || k.length > 60) return [];
@@ -337,12 +379,32 @@ export function suggest(input: string, limit = 8): number[] {
     for (const [key, ps] of index.full) for (const p of ps) prefixKeys.push({ k: key, p });
     for (const [key, ps] of index.sur) for (const p of ps) prefixKeys.push({ k: key, p });
     prefixKeys.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+    playerWords = data.players.map((pl) => wordsOf(pl.n));
+    wordKeys = [];
+    playerWords.forEach((ws, p) => { for (const w of new Set(ws)) wordKeys!.push({ w, p }); });
+    wordKeys.sort((a, b) => (a.w < b.w ? -1 : a.w > b.w ? 1 : 0));
   }
-  let lo = 0, hi = prefixKeys.length;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (prefixKeys[mid].k < k) lo = mid + 1; else hi = mid; }
   const found = new Set<number>();
-  for (let i = lo; i < prefixKeys.length && prefixKeys[i].k.startsWith(k) && found.size < 3000; i++) found.add(prefixKeys[i].p);
-  return [...found].sort((a, b) => data.players[b].s - data.players[a].s).slice(0, limit);
+  for (let i = lowerBound(prefixKeys, k, (x) => x.k); i < prefixKeys.length && prefixKeys[i].k.startsWith(k) && found.size < 3000; i++) found.add(prefixKeys[i].p);
+  const typed = normalize(input).split(' ').filter(Boolean);
+  if (typed.length >= 2) {
+    // Candidates from the longest typed word, then every other word must match too.
+    const longest = [...typed].sort((a, b) => b.length - a.length)[0];
+    for (let i = lowerBound(wordKeys!, longest, (x) => x.w); i < wordKeys!.length && wordKeys![i].w.startsWith(longest); i++) {
+      const p = wordKeys![i].p;
+      if (!found.has(p) && wordsMatch(typed, playerWords![p])) found.add(p);
+    }
+  }
+  // Surname = every word but the first (or the only word): a match there ranks higher.
+  const surnameHit = (p: number) => {
+    const ws = playerWords![p];
+    const sur = ws.length > 1 ? ws.slice(1) : ws;
+    return typed.some((t) => sur.some((w) => w.startsWith(t))) || sur.join('').startsWith(k);
+  };
+  // A typed word that is exactly the last name counts most ("andre" → Benjamin André before Andrés Iniesta).
+  const exactLast = (p: number) => { const ws = playerWords![p]; return typed.includes(ws[ws.length - 1]); };
+  const weight = (p: number) => data.players[p].s * (exactLast(p) ? 6 : surnameHit(p) ? 3 : 1);
+  return [...found].sort((a, b) => weight(b) - weight(a)).slice(0, limit);
 }
 /** Main club (most appearances, else longest stint) and seasons played, for telling homonyms apart. */
 function career(p: number): { club?: number; from?: number; to?: number } {

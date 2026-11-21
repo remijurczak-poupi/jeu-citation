@@ -37,3 +37,15 @@ describe('suggestions and homonyms', () => {
     expect(applyGuess(g, 'Seko Fofana', 2000, pick).outcome.status).toBe('ok');
   });
 });
+
+describe('words in any order', () => {
+  const names = (q: string) => suggest(q).map((p) => data.players[p].n);
+  it('finds Benjamin André from his surname first', () => {
+    expect(names('andre benj')).toContain('Benjamin André');
+    expect(names('André Benjamin')).toContain('Benjamin André');
+    expect(names('benjamin andre')).toContain('Benjamin André');
+  });
+  it('accepts a typed answer in reverse order', () => {
+    expect(matchGuess(getMatcher({ league: 'L1' }), 'André Benjamin', new Set())).toMatchObject({ status: 'ok' });
+  });
+});
