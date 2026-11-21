@@ -318,7 +318,16 @@ export function matchGuess(m: Matcher, input: string, cited: Set<number>, strict
     if (!cands.length) continue;
     const sorted = [...cands].sort((a, b) => data.players[b].s - data.players[a].s);
     const fresh = sorted.filter((p) => !cited.has(p));
-    if (!fresh.length) return { status: 'duplicate', player: sorted[0] };
+    if (!fresh.length) {
+      // Same full name as a player already given ("Nuno Mendes" twice): they mean the other one,
+      // who is a different player (by id) and just not in the theme.
+      if (i <= 1) {
+        const homonyms = (i === 0 ? index.full.get(k) : orderFreeIndex().get(orderFreeKey(words))) ?? [];
+        const other = homonyms.filter((p) => !cited.has(p)).sort((a, b) => data.players[b].s - data.players[a].s)[0];
+        if (other !== undefined) return { status: 'wrong', player: other };
+      }
+      return { status: 'duplicate', player: sorted[0] };
+    }
     // A bare surname shared by players of similar fame ("Fofana"): ask which one instead of guessing.
     // The options come from the whole base, so the question reveals nothing about the theme.
     if (i === 2 && fresh.length > 1 && data.players[fresh[1]].s * 2 >= data.players[fresh[0]].s) {

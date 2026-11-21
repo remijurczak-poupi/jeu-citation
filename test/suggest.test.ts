@@ -49,3 +49,16 @@ describe('words in any order', () => {
     expect(matchGuess(getMatcher({ league: 'L1' }), 'André Benjamin', new Set())).toMatchObject({ status: 'ok' });
   });
 });
+
+describe('players sharing a full name are different answers', () => {
+  const strasbourg = playerIndex('Q3346419')!, psg = playerIndex('Q96396963')!;
+  it('both Nuno Mendes count when both fit the theme, by pick or by text', () => {
+    const m = getMatcher(normalizeCriterion({ nationality: 'PT' }));
+    expect(matchPick(m, psg, new Set([strasbourg])).status).toBe('ok');
+    expect(matchGuess(m, 'Nuno Mendes', new Set([strasbourg]))).toEqual({ status: 'ok', player: psg });
+  });
+  it('the other Nuno Mendes is "not in the theme", never "already given"', () => {
+    const m = getMatcher(normalizeCriterion({ league: 'L1', from: 2021 }));
+    expect(matchGuess(m, 'Nuno Mendes', new Set([psg]))).toEqual({ status: 'wrong', player: strasbourg });
+  });
+});
