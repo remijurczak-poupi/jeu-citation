@@ -336,3 +336,48 @@ label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; fo
 .club-stats strong { font-family: var(--font-display); font-size: 28px; color: var(--accent); }
 .club-stats span { font-size: 12px; color: var(--muted); }
 .ok-note { color: var(--ok); font-weight: 700; }
+
+/* ---------- streak, recap, challenge, reports ---------- */
+.streak { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 12px; }
+.streak-count { font-weight: 700; color: var(--warn); }
+.streak-count small { color: var(--muted); font-weight: 500; }
+.reminder { display: flex; gap: 8px; width: 100%; }
+.reminder input { width: auto; flex: 0 0 auto; }
+.guest-cta { border: 1px solid var(--accent); background: linear-gradient(180deg, rgba(230, 194, 41, 0.1), transparent 70%), var(--card); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
+.guest-cta h2 { margin-top: 0; }
+.recap h2 { font-size: 22px; margin: 6px 0 8px; }
+.rarest { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 6px; }
+.rarest li { display: flex; justify-content: space-between; gap: 8px; background: var(--card2); border-radius: 10px; padding: 10px 12px; }
+.rarest small { color: var(--accent); white-space: nowrap; }
+.missed { color: var(--muted); line-height: 1.6; margin: 0; }
+.refused { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.refused li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.refused small { color: var(--muted); }
+button.report { background: none; border: none; color: var(--muted); text-decoration: underline; font-size: 13px; padding: 6px 0; min-height: 0; width: auto; }
+button.report.inline { border: 1px solid var(--line); text-decoration: none; border-radius: 999px; padding: 4px 12px; }
+.report.done { color: var(--ok); font-size: 13px; }
+.flash-slot { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.flash-slot .flash { align-self: stretch; }
+.challenge-page { text-align: center; }
+.challenge-page .eyebrow { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; margin: 0; }
+.challenge-page h2 { font-size: 32px; margin: 6px 0 4px; }
+.challenge-lead { font-size: 18px; font-weight: 700; margin: 0 0 10px; }
+.challenge-verdict { font-weight: 700; font-size: 18px; color: var(--accent); }
+.lb-list { list-style: none; padding: 0; margin: 0; }
+.lb-list li { display: grid; grid-template-columns: 32px 26px 1fr auto; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.lb-list li.me { background: rgba(230, 194, 41, 0.1); border-radius: 8px; }
+.lb-list .lb-name small { display: block; color: var(--muted); font-size: 12px; }
+
+/* ---------- phone: keep the clock above the keyboard, big thumb targets ---------- */
+@media (max-width: 760px) {
+  .game .scoreboard { position: sticky; top: 58px; z-index: 15; }
+  .game:focus-within .scoreboard { padding: 6px 10px; }
+  .game:focus-within .scoreboard .sb-theme { display: none; }
+  .game:focus-within .scoreboard .big-num { font-size: 30px; line-height: 1; }
+  .game:focus-within .scoreboard small { font-size: 10px; }
+  .game .guess-form { position: sticky; top: calc(58px + 74px); z-index: 14; }
+  .game:not(:focus-within) .guess-form { position: static; }
+  .suggest li { min-height: 48px; font-size: 17px; padding: 10px 14px; align-items: center; }
+  .suggest { max-height: 45vh; overflow-y: auto; }
+  .game:focus-within ~ .tabbar, body:has(.game input:focus) .tabbar { display: none; }
+}

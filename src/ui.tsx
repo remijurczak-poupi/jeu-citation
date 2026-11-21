@@ -384,11 +384,12 @@ export function ClubPicker({ meta, value, country, onChange }: { meta: Meta; val
 // ---------- Profile ----------
 // The profile lives in this browser (a guest profile). Signing in is optional: it saves the
 // profile to an e-mail address so it can be opened on another device.
-export function ProfileForm({ meta, onDone, presetClub }: { meta: Meta; onDone: () => void; presetClub?: string }) {
+export function ProfileForm({ meta, onDone, presetClub, compact }: { meta: Meta; onDone: () => void; presetClub?: string; compact?: boolean }) {
   const { t, lang } = useI18n();
   const s = getSession();
-  const [pseudo, setPseudo] = useState(s?.pseudo ?? '');
-  const [club, setClub] = useState(presetClub ?? s?.club ?? '');
+  // A guest's generated nickname and empty club are placeholders, not choices.
+  const [pseudo, setPseudo] = useState(s?.guest ? '' : s?.pseudo ?? '');
+  const [club, setClub] = useState(presetClub ?? (s?.guest ? '' : s?.club ?? ''));
   const [country, setCountry] = useState(s?.country ?? (lang === 'fr' ? 'FR' : ''));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -407,9 +408,9 @@ export function ProfileForm({ meta, onDone, presetClub }: { meta: Meta; onDone: 
 
   return (
     <>
-      <div className="card profile">
-        <h2>{t.profileTitle}</h2>
-        <p className="hint">{t.profileHint}</p>
+      <div className={compact ? 'profile' : 'card profile'}>
+        {!compact && <h2>{t.profileTitle}</h2>}
+        {!compact && <p className="hint">{t.profileHint}</p>}
         <label><span>{t.pseudo}</span><input value={pseudo} maxLength={16} onChange={(e) => setPseudo(e.target.value)} autoComplete="nickname" /></label>
         <label>
           <span>{t.country}</span>
@@ -425,7 +426,7 @@ export function ProfileForm({ meta, onDone, presetClub }: { meta: Meta; onDone: 
         {error && <p className="error">{error}</p>}
         <button className="primary" disabled={busy || !pseudo || !club || !country} onClick={submit}>{t.save}</button>
       </div>
-      <SignIn meta={meta} onSignedIn={onDone} />
+      {!compact && <SignIn meta={meta} onSignedIn={onDone} />}
     </>
   );
 }

@@ -1,7 +1,7 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
+import type { Challenge, GameRecap, ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
 
-export interface Session extends Profile { id: string; secret: string }
+export interface Session extends Profile { id: string; secret: string; guest?: boolean }
 
 const KEY = 'ntp-session';
 export function loadSession(): Session | null {
@@ -19,7 +19,19 @@ let session: Session | null = loadSession();
 export const getSession = () => session;
 export const setSession = (s: Session) => { session = s; saveSession(s); };
 
+/** Guest profile created on the first action that needs one (start a game, join a room…). */
+let guestPending: Promise<void> | null = null;
+export function ensureSession(): Promise<void> {
+  if (session) return Promise.resolve();
+  let lang = 'en';
+  try { lang = localStorage.getItem('lang') ?? document.documentElement.lang ?? 'en'; } catch { /* ignore */ }
+  guestPending ??= call<Session>('POST', '/profile/guest', { lang }).then((s) => setSession({ ...s, guest: true })).finally(() => { guestPending = null; });
+  return guestPending;
+}
+const NEEDS_PROFILE = /^\/(games|rooms|challenges)/;
+
 async function call<R>(method: string, path: string, body?: unknown): Promise<R> {
+  if (!session && method !== 'GET' && NEEDS_PROFILE.test(path)) await ensureSession();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (session) { headers['x-device-id'] = session.id; headers['x-device-secret'] = session.secret; }
   const res = await fetch('/api' + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -36,7 +48,13 @@ export const api = {
   signInGoogle: (credential: string) => call<SignInResult>('POST', '/auth/google', { credential }),
   sendEmailLink: (email: string, lang: string) => call<{ ok: true }>('POST', '/auth/email', { email, lang }),
   verifyEmailLink: (token: string) => call<SignInResult>('POST', '/auth/email/verify', { token }),
+  ensureSession,
   startGame: (mode: SoloMode, criterion?: Criterion, date?: string) => call<GameState>('POST', '/games', { mode, criterion, date }),
+  acceptChallenge: (code: string) => call<GameState>('POST', '/games', { challenge: code }),
+  recap: (id: string) => call<GameRecap>('GET', `/games/${id}/recap`),
+  createChallenge: (gameId: string) => call<{ code: string }>('POST', '/challenges', { gameId }),
+  challenge: (code: string) => call<Challenge>('GET', `/challenges/${code}`),
+  report: (r: { gameId?: string; text: string; recognised?: string; criterion: Criterion; note?: string }) => call<{ ok: true }>('POST', '/reports', r),
   game: (id: string) => call<GameState>('GET', `/games/${id}`),
   guess: (id: string, text: string, pick?: string) => call<{ outcome: GuessOutcome; state: GameState }>('POST', `/games/${id}/guess`, { text, ...(pick ? { pick } : {}) }),
   suggest: (q: string, criterion?: Criterion) => call<Suggestion[]>('GET', `/suggest?q=${encodeURIComponent(q)}${criterion ? '&c=' + encodeURIComponent(JSON.stringify(criterion)) : ''}`),

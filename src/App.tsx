@@ -5,7 +5,7 @@ import { loadFanClubs } from './clubs';
 import { dictionaries, I18n, initialLang, LANGS, useI18n, type Lang } from './i18n';
 import { themeLabel } from './format';
 import { Badges, ClubPage, Leaderboard, LoginLink, ProfileForm, RankedThemePicker, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
-import { GameScreen } from './screens/Game';
+import { ChallengePage, GameScreen } from './screens/Game';
 import { RoomScreen, RoomHome } from './screens/Room';
 import type { BoardKind, Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
 import { MODE_RULES, SOLO_GROUPS } from '../shared/types';
@@ -71,9 +71,9 @@ export default function App() {
   let screen;
   if (!meta) screen = null;
   else if (parts[0] === 'club' && parts[1]) screen = <div className="page narrow"><ClubPage meta={meta} q={parts[1]} onSupport={() => (getSession() ? nav.go('/leaderboards') : nav.go('/profile/' + parts[1]))} /></div>;
-  else if (parts[0] === 'profile' && parts[1] && !hasProfile) screen = <div className="page narrow"><ProfileForm meta={meta} presetClub={parts[1]} onDone={() => { setHasProfile(true); nav.go('/leaderboards'); }} /></div>;
+  else if (parts[0] === 'challenge' && parts[1]) screen = <div className="page narrow"><ChallengePage code={parts[1]} meta={meta} nav={nav} /></div>;
+  else if (parts[0] === 'profile' && parts[1]) screen = <div className="page narrow"><ProfileForm meta={meta} presetClub={parts[1]} onDone={() => { setHasProfile(true); nav.go('/leaderboards'); }} /></div>;
   else if (parts[0] === 'login' && parts[1]) screen = <div className="page narrow"><LoginLink token={parts[1]} onDone={() => { setHasProfile(!!getSession()); nav.go('/'); }} /></div>;
-  else if (!hasProfile) screen = <div className="page narrow"><ProfileForm meta={meta} onDone={() => setHasProfile(true)} /></div>;
   else if (parts[0] === 'game' && parts[1]) screen = <GameScreen id={parts[1]} meta={meta} nav={nav} />;
   else if (parts[0] === 'daily') screen = <Home meta={meta} nav={nav} dailyOnly />;
   else if (parts[0] === 'solo') screen = <SoloSetup meta={meta} nav={nav} />;
@@ -89,7 +89,7 @@ export default function App() {
         <a href="#/" className="logo" onClick={guardClick}><span className="ball">⚽</span> <span className="logo-text">{i18n.t.appName}</span></a>
         <nav className="mainnav">{sections.map((x) => <a key={x.id} href={'#/' + x.id} className={section === x.id ? 'on' : ''} onClick={guardClick}>{x.label}</a>)}</nav>
         <nav className="side">
-          {hasProfile && <a href="#/profile" title={i18n.t.profileTitle} onClick={guardClick}>👤</a>}
+          {<a href="#/profile" title={i18n.t.profileTitle} onClick={guardClick}>👤</a>}
           <select className="lang" value={lang} onChange={(e) => setLang(e.target.value as Lang)} aria-label={i18n.t.language}>
             {LANGS.map((l) => <option key={l.id} value={l.id}>{l.id.toUpperCase()}</option>)}
           </select>
@@ -145,6 +145,7 @@ function Home({ meta, nav, dailyOnly }: { meta: Meta; nav: Nav; dailyOnly?: bool
           </div>
           <p className="daily-theme">{themeLabel(daily.criterion, meta, lang, t)}</p>
           <p className="hint">{t.dailyHint} {daily.playerCount > 0 && `· ${t.peoplePlayed(daily.playerCount)}`}</p>
+          <Streak daily={daily} />
           {daily.played?.status === 'finished' ? (
             <>
               <p className="daily-score"><strong>{daily.played.count}</strong> {t.players}{daily.played.rank ? ` · ${t.rank} ${daily.played.rank}/${daily.played.total}` : ''}</p>
@@ -185,6 +186,45 @@ function Home({ meta, nav, dailyOnly }: { meta: Meta; nav: Nav; dailyOnly?: bool
             ))}
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+// ---------- Daily streak & reminder ----------
+/** A recurring calendar event (.ics) opening the daily challenge: works on every phone, no notification permission. */
+function calendarReminder(time: string, title: string) {
+  const [h, m] = time.split(':').map(Number);
+  const start = new Date(); start.setHours(h, m, 0, 0);
+  if (start.getTime() < Date.now()) start.setDate(start.getDate() + 1);
+  const end = new Date(start.getTime() + 10 * 60_000);
+  const fmt = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}00`;
+  const url = `${location.origin}/#/daily`;
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Name the Players//Daily//EN', 'BEGIN:VEVENT',
+    `UID:daily-${Date.now()}@name-the-players`, `DTSTAMP:${fmt(new Date())}`, `DTSTART:${fmt(start)}`, `DTEND:${fmt(end)}`,
+    'RRULE:FREQ=DAILY', `SUMMARY:⚽ ${title}`, `URL:${url}`, `DESCRIPTION:${url}`,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${title}`, 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+  a.download = 'name-the-players-daily.ics';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function Streak({ daily }: { daily: DailyInfo }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [time, setTime] = useState('19:00');
+  const st = daily.streak;
+  return (
+    <div className="streak">
+      <span className="streak-count">{st && st.current > 0 ? <>🔥 {t.streakDays(st.current)}{st.best > st.current && <small> · {t.streakBest(st.best)}</small>}</> : <small>{t.streakStart}</small>}</span>
+      <button className="link" onClick={() => setOpen(!open)}>⏰ {t.remindMe}</button>
+      {open && (
+        <div className="reminder">
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <button onClick={() => { calendarReminder(time, t.reminderEvent); setOpen(false); }}>{t.addToCalendar}</button>
+        </div>
       )}
     </div>
   );

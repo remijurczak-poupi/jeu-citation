@@ -1,13 +1,13 @@
 // API Worker: profiles, solo games, daily challenge, leaderboards and private rooms.
 import fanClubs from '../src/data/fan-clubs.json';
 import { Hono, type Context } from 'hono';
-import { data, normalizeCriterion, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
-import { dailyCriterion, dailyNumber, todayKey } from './daily';
+import { data, getMatcher, normalizeCriterion, playerIndex, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
+import { dailyCriterion, dailyNumber, dailyStreak, todayKey } from './daily';
 import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
-import type { Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
+import type { Challenge, DailyStreak, GameRecap, Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
 import { MODE_RULES, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
 
 export { Room } from './room';
@@ -134,7 +134,7 @@ app.post('/api/profile', async (c) => {
   const taken = await c.env.DB.prepare('SELECT id FROM profiles WHERE pseudo_norm = ?').bind(pseudoNorm(pseudo)).first<{ id: string }>();
   if (taken && taken.id !== me?.id) throw new HttpError(409, 'pseudo_taken');
   if (me) {
-    await c.env.DB.prepare('UPDATE profiles SET pseudo = ?, pseudo_norm = ?, club = ?, country = ? WHERE id = ?')
+    await c.env.DB.prepare('UPDATE profiles SET pseudo = ?, pseudo_norm = ?, club = ?, country = ?, guest = 0 WHERE id = ?')
       .bind(pseudo, pseudoNorm(pseudo), body.club, body.country, me.id).run();
     return c.json({ id: me.id, pseudo, club: body.club, country: body.country });
   }
@@ -143,6 +143,26 @@ app.post('/api/profile', async (c) => {
   await c.env.DB.prepare('INSERT INTO profiles (id, secret_hash, pseudo, pseudo_norm, club, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(id, await sha256(secret), pseudo, pseudoNorm(pseudo), body.club, body.country, Date.now()).run();
   return c.json({ id, secret, pseudo, club: body.club, country: body.country });
+});
+
+// One click to play: a guest profile with a generated nickname, offered to personalise after the first game.
+const GUEST_WORD: Record<string, string> = { en: 'Player', fr: 'Joueur', de: 'Spieler', es: 'Jugador', it: 'Giocatore', pt: 'Jogador' };
+app.post('/api/profile/guest', async (c) => {
+  const me = c.get('me');
+  if (me) return c.json({ ...me });
+  const { lang } = (await c.req.json().catch(() => ({}))) as { lang?: string };
+  const word = GUEST_WORD[lang ?? 'en'] ?? GUEST_WORD.en;
+  const ip = c.req.header('cf-ipcountry') ?? '';
+  const country = /^[A-Z]{2}$/.test(ip) && ip !== 'XX' && ip !== 'T1' ? ip : '';
+  const id = crypto.randomUUID();
+  const secret = newSecret();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const pseudo = `${word} ${String(Math.floor(10000 + Math.random() * 90000))}`;
+    const res = await c.env.DB.prepare('INSERT OR IGNORE INTO profiles (id, secret_hash, pseudo, pseudo_norm, club, country, created_at, guest) VALUES (?, ?, ?, ?, ?, ?, ?, 1)')
+      .bind(id, await sha256(secret), pseudo, pseudoNorm(pseudo), 'other', country, Date.now()).run();
+    if (res.meta.changes) return c.json({ id, secret, pseudo, club: 'other', country, guest: true });
+  }
+  throw new HttpError(503, 'server_error');
 });
 
 // ---------- optional sign-in (find your profile on another device) ----------
@@ -263,7 +283,14 @@ async function rankOf(c: C, g: GameRow) {
 
 app.post('/api/games', async (c) => {
   const me = requireMe(c);
-  const body = (await c.req.json().catch(() => ({}))) as { mode?: SoloMode; criterion?: unknown; date?: string };
+  const body = (await c.req.json().catch(() => ({}))) as { mode?: SoloMode; criterion?: unknown; date?: string; challenge?: string };
+  let challenge: { code: string; mode: SoloMode; criterion: string; start: string | null } | null = null;
+  if (typeof body.challenge === 'string') {
+    challenge = await c.env.DB.prepare('SELECT code, mode, criterion, start FROM challenges WHERE code = ?').bind(body.challenge.toUpperCase()).first();
+    if (!challenge) throw new HttpError(404, 'challenge_not_found');
+    body.mode = challenge.mode;
+    body.criterion = JSON.parse(challenge.criterion);
+  }
   const mode = body.mode;
   if (!mode || !SOLO_MODES.includes(mode)) throw new HttpError(400, 'bad_mode');
   const now = Date.now();
@@ -295,16 +322,19 @@ app.post('/api/games', async (c) => {
     const criterion = parseCriterion(body.criterion);
     if (scopeSize(criterion) < MIN_THEME_SIZE) throw new HttpError(400, 'theme_too_small');
     g = newGame(crypto.randomUUID(), me.id, mode, criterion, now);
-    if (mode === 'chain') {
+    g.challenge = challenge?.code ?? null;
+    if (mode === 'chain' && challenge?.start) {
+      g.found = JSON.stringify([challenge.start]);
+    } else if (mode === 'chain') {
       const start = chainStart(criterion);
       if (start === null) throw new HttpError(400, 'theme_too_small');
       g.found = JSON.stringify([data.players[start].q]);
     }
   }
   await c.env.DB.prepare(
-    `INSERT INTO games (id, device_id, mode, criterion, board_key, daily_date, started_at, deadline, last_at, status, found, count, points, errors, guesses, end_reason, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, NULL, 0)`,
-  ).bind(g.id, g.device_id, g.mode, g.criterion, g.board_key, g.daily_date, g.started_at, g.deadline, g.last_at, g.status, g.found).run();
+    `INSERT INTO games (id, device_id, mode, criterion, board_key, daily_date, started_at, deadline, last_at, status, found, count, points, errors, guesses, end_reason, version, challenge)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, NULL, 0, ?)`,
+  ).bind(g.id, g.device_id, g.mode, g.criterion, g.board_key, g.daily_date, g.started_at, g.deadline, g.last_at, g.status, g.found, g.challenge ?? null).run();
   return c.json(toState(g, now));
 });
 
@@ -342,6 +372,100 @@ app.post('/api/games/:id/finish', async (c) => {
   return c.json(toState(g, now, await rankOf(c, g)));
 });
 
+// ---------- end of game extras ----------
+app.get('/api/games/:id/recap', async (c) => {
+  const me = requireMe(c);
+  const g = await loadGame(c, c.req.param('id'), me);
+  if (g.status !== 'finished') throw new HttpError(409, 'game_active');
+  const criterion = JSON.parse(g.criterion) as Criterion;
+  const foundQ: string[] = JSON.parse(g.found);
+  const found = new Set(foundQ.map(playerIndex).filter((p): p is number => p !== undefined));
+  // Best-known players of the theme that were not named.
+  const missed = g.mode === 'chain' ? [] : [...getMatcher(criterion).scope.players].filter((p) => !found.has(p))
+    .sort((a, b) => data.players[b].s - data.players[a].s).slice(0, 8).map((p) => data.players[p].n);
+  // Rarest answers: share of finished games on this theme that named them (fame when too few games).
+  const games = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM games WHERE criterion = ? AND status = 'finished'`).bind(g.criterion).first<{ n: number }>();
+  const total = games?.n ?? 0;
+  let rarest: GameRecap['rarest'] = [];
+  const chainStartQ = g.mode === 'chain' ? foundQ[0] : undefined;
+  const answers = foundQ.filter((q) => q !== chainStartQ);
+  if (answers.length) {
+    if (total >= 10) {
+      const theme = criterionKey(criterion);
+      const counts = new Map<string, number>();
+      for (let i = 0; i < answers.length; i += 90) {
+        const chunk = answers.slice(i, i + 90);
+        const res = await c.env.DB.prepare(`SELECT player, n FROM citations WHERE theme_key = ? AND player IN (${chunk.map(() => '?').join(',')})`).bind(theme, ...chunk).all<{ player: string; n: number }>();
+        for (const r of res.results) counts.set(r.player, r.n);
+      }
+      rarest = answers.map((q) => ({ q, pct: Math.min(100, Math.round(((counts.get(q) ?? 1) / total) * 100)) }))
+        .sort((a, b) => a.pct - b.pct).slice(0, 3).map((r) => ({ name: data.players[playerIndex(r.q)!].n, pct: r.pct }));
+    } else {
+      rarest = answers.map((q) => playerIndex(q)).filter((p): p is number => p !== undefined)
+        .sort((a, b) => data.players[a].s - data.players[b].s).slice(0, 3).map((p) => ({ name: data.players[p].n }));
+    }
+  }
+  let tiers: number[] | undefined;
+  if (g.daily_date) {
+    const res = await c.env.DB.prepare(`SELECT found FROM games WHERE daily_date = ? AND status = 'finished'`).bind(g.daily_date).all<{ found: string }>();
+    const t = rarityTiers(res.results.map((r) => JSON.parse(r.found) as string[]));
+    tiers = foundQ.map((q) => t.get(q) ?? 1);
+  }
+  return c.json({ missed, rarest, ...(tiers ? { tiers } : {}) } satisfies GameRecap);
+});
+
+// ---------- challenge a friend (same mode and theme, no room) ----------
+app.post('/api/challenges', async (c) => {
+  const me = requireMe(c);
+  const { gameId } = (await c.req.json().catch(() => ({}))) as { gameId?: string };
+  const g = await loadGame(c, String(gameId ?? ''), me);
+  if (g.status !== 'finished' || g.mode === 'daily') throw new HttpError(400, 'bad_game');
+  const existing = await c.env.DB.prepare('SELECT code FROM challenges WHERE game_id = ?').bind(g.id).first<{ code: string }>();
+  if (existing) return c.json({ code: existing.code });
+  const start = g.mode === 'chain' ? (JSON.parse(g.found) as string[])[0] ?? null : null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = randomCode(6);
+    const res = await c.env.DB.prepare('INSERT OR IGNORE INTO challenges (code, game_id, device_id, mode, criterion, start, count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(code, g.id, me.id, g.mode, g.criterion, start, g.count, Date.now()).run();
+    if (res.meta.changes) return c.json({ code });
+  }
+  throw new HttpError(503, 'no_code');
+});
+
+app.get('/api/challenges/:code', async (c) => {
+  const me = c.get('me');
+  const code = c.req.param('code').toUpperCase();
+  const ch = await c.env.DB.prepare(
+    `SELECT ch.code, ch.mode, ch.criterion, ch.count, p.pseudo, p.country FROM challenges ch JOIN profiles p ON p.id = ch.device_id WHERE ch.code = ?`,
+  ).bind(code).first<{ code: string; mode: SoloMode; criterion: string; count: number; pseudo: string; country: string }>();
+  if (!ch) throw new HttpError(404, 'challenge_not_found');
+  const res = await c.env.DB.prepare(
+    `SELECT g.device_id, MAX(g.count) AS count, p.pseudo, p.country FROM games g JOIN profiles p ON p.id = g.device_id
+     WHERE g.challenge = ? AND g.status = 'finished' GROUP BY g.device_id ORDER BY count DESC LIMIT 50`,
+  ).bind(code).all<{ device_id: string; count: number; pseudo: string; country: string }>();
+  return c.json({
+    code: ch.code, mode: ch.mode, criterion: JSON.parse(ch.criterion),
+    from: { pseudo: ch.pseudo, country: ch.country, count: ch.count },
+    takers: res.results.map((r) => ({ pseudo: r.pseudo, country: r.country, count: r.count, ...(me && r.device_id === me.id ? { me: true } : {}) })),
+  } satisfies Challenge);
+});
+
+// ---------- "this answer should have counted" ----------
+app.post('/api/reports', async (c) => {
+  const me = c.get('me');
+  const b = (await c.req.json().catch(() => ({}))) as { gameId?: string; text?: string; recognised?: string; criterion?: unknown; note?: string };
+  if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > 80) throw new HttpError(400, 'bad_text');
+  const criterion = parseCriterion(b.criterion ?? {});
+  if (me) {
+    const recent = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM reports WHERE device_id = ? AND created_at > ?').bind(me.id, Date.now() - 3600_000).first<{ n: number }>();
+    if ((recent?.n ?? 0) >= 30) throw new HttpError(429, 'too_many_reports');
+  }
+  await c.env.DB.prepare('INSERT INTO reports (device_id, game_id, text, recognised, criterion, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(me?.id ?? null, typeof b.gameId === 'string' ? b.gameId.slice(0, 40) : null, b.text.trim(), typeof b.recognised === 'string' ? b.recognised.slice(0, 120) : null,
+      JSON.stringify(criterion), typeof b.note === 'string' ? b.note.slice(0, 300) : null, Date.now()).run();
+  return c.json({ ok: true });
+});
+
 // ---------- daily ----------
 app.get('/api/daily', async (c) => {
   const me = c.get('me');
@@ -358,7 +482,12 @@ app.get('/api/daily', async (c) => {
     }
   }
   const n = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM scores WHERE board_key = ?').bind(`daily:${date}`).first<{ n: number }>();
-  return c.json({ date, number: dailyNumber(date), criterion, difficulty, played, playerCount: n?.n ?? 0 } satisfies DailyInfo);
+  let streak: DailyStreak | undefined;
+  if (me) {
+    const rows = await c.env.DB.prepare('SELECT daily_date AS d FROM games WHERE device_id = ? AND daily_date IS NOT NULL ORDER BY daily_date').bind(me.id).all<{ d: string }>();
+    streak = dailyStreak(rows.results.map((r) => r.d), date);
+  }
+  return c.json({ date, number: dailyNumber(date), criterion, difficulty, played, playerCount: n?.n ?? 0, ...(streak ? { streak } : {}) } satisfies DailyInfo);
 });
 
 app.get('/api/daily/history', async (c) => {
@@ -515,7 +644,7 @@ async function pointRows(c: C, by: 'club' | 'country', period: 'week' | 'all'): 
   const res = await c.env.DB.prepare(
     `SELECT p.${by} AS k, SUM(s.count) AS points, COUNT(DISTINCT s.device_id) AS players
      FROM scores s JOIN profiles p ON p.id = s.device_id
-     WHERE s.board_key >= ? AND s.board_key < 'daily;' AND p.${by} <> 'other'
+     WHERE s.board_key >= ? AND s.board_key < 'daily;' AND p.${by} NOT IN ('other', '')
      GROUP BY p.${by} ORDER BY points DESC`,
   ).bind('daily:' + from).all<{ k: string; points: number; players: number }>();
   return res.results.map((r, i) => ({ rank: i + 1, key: r.k, points: r.points, players: r.players }));
@@ -525,7 +654,7 @@ async function pointRows(c: C, by: 'club' | 'country', period: 'week' | 'all'): 
 async function supporterRows(c: C, by: 'club' | 'country', period: 'week' | 'month'): Promise<WarRow[]> {
   const res = await c.env.DB.prepare(
     `SELECT p.${by} AS k, COUNT(*) AS players FROM profiles p
-     WHERE p.${by} <> 'other' AND EXISTS (SELECT 1 FROM games g WHERE g.device_id = p.id AND g.started_at >= ?)
+     WHERE p.${by} NOT IN ('other', '') AND EXISTS (SELECT 1 FROM games g WHERE g.device_id = p.id AND g.started_at >= ?)
      GROUP BY p.${by} ORDER BY players DESC`,
   ).bind(periodStart(period)).all<{ k: string; players: number }>();
   let rank = 0, prev = -1;

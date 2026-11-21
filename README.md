@@ -100,3 +100,12 @@ npm run deploy
 ```
 
 The free plan allows 100,000 requests a day and 10 ms of CPU per request. Name matching on the largest themes is close to that limit: if answers start failing, move to the Workers Paid plan ($5/month).
+
+## Reports of refused answers
+
+Players can report an answer that should have counted. Review them with:
+
+```
+npx wrangler d1 execute DB --remote --command "SELECT id, text, recognised, criterion, created_at FROM reports WHERE status = 'open' ORDER BY created_at DESC"
+```
+and mark them done with `UPDATE reports SET status = 'done' WHERE id = …` once the data is fixed.

@@ -1,6 +1,7 @@
 // Solo games: the server holds the state, validates each answer and computes the score.
 import { criterionKey, data, getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, rankedThemeId, describeList } from './data';
 import { chainMatcher, clubLabel, seasonLabel, teammates } from './chain';
+import { dailyNumber } from './daily';
 
 let qidIndex: Map<string, number> | null = null;
 export function playerByQ(q: string): number | undefined {
@@ -31,6 +32,7 @@ export interface GameRow {
   guesses: number;
   end_reason: GameState['endReason'] | null;
   version: number;
+  challenge?: string | null; // code of the challenge this game answers
 }
 
 export function boardKey(mode: SoloMode, c: Criterion, dailyDate?: string) {
@@ -118,8 +120,9 @@ export function toState(g: GameRow, now: number, extra?: Partial<GameState>): Ga
     ...(g.mode === 'chain' ? { chain: chainLinks(found) } : {}),
     ...(g.mode !== 'daily' && rankedThemeId(JSON.parse(g.criterion)) ? { rankedTheme: rankedThemeId(JSON.parse(g.criterion)) } : {}),
     ...(g.end_reason ? { endReason: g.end_reason } : {}),
-    ...(g.daily_date ? { dailyDate: g.daily_date } : {}),
-    ...(g.board_key.startsWith('archive:') ? { dailyDate: g.board_key.slice(8), archive: true } : {}),
+    ...(g.daily_date ? { dailyDate: g.daily_date, dailyNumber: dailyNumber(g.daily_date) } : {}),
+    ...(g.board_key.startsWith('archive:') ? { dailyDate: g.board_key.slice(8), dailyNumber: dailyNumber(g.board_key.slice(8)), archive: true } : {}),
+    ...(g.challenge ? { challenge: g.challenge } : {}),
     ...extra,
   };
 }

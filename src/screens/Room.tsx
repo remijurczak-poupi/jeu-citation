@@ -69,7 +69,9 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
   useEffect(() => {
     let closed = false;
     let retry: ReturnType<typeof setTimeout>;
-    const connect = () => {
+    const connect = async () => {
+      await api.ensureSession().catch(() => {});
+      if (closed) return;
       const sock = new WebSocket(api.roomSocketUrl(code));
       ws.current = sock;
       sock.onmessage = (ev) => {

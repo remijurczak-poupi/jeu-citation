@@ -1,3 +1,4 @@
+import type { DailyStreak } from '../shared/types';
 // Daily challenge: one theme per day, the same for everyone, alternating easy and hard days.
 import { data, scopeSize } from './data';
 import type { Criterion } from '../shared/types';
@@ -63,3 +64,17 @@ export function dailyCriterion(date: string): { criterion: Criterion; difficulty
   }
   return { criterion: { league: 'PL' }, difficulty };
 }
+
+/** Days in a row with a daily challenge played; today not played yet keeps yesterday's streak alive. */
+export function dailyStreak(dates: string[], today: string): DailyStreak {
+  const day = (d: string) => Math.round(Date.parse(d + 'T12:00:00Z') / 86400_000);
+  const days = [...new Set(dates.map(day))].sort((a, b) => a - b);
+  let best = 0, run = 0;
+  for (let i = 0; i < days.length; i++) { run = i > 0 && days[i] === days[i - 1] + 1 ? run + 1 : 1; best = Math.max(best, run); }
+  const t = day(today);
+  const playedToday = days.includes(t);
+  const last = days[days.length - 1];
+  const current = last === t || last === t - 1 ? run : 0;
+  return { current, best, playedToday };
+}
+

@@ -96,10 +96,24 @@ export interface GameState {
   rank?: number;
   total?: number;
   dailyDate?: string;
+  dailyNumber?: number;
   archive?: boolean; // replay of a past daily challenge, not ranked
   chain?: ChainLink[]; // chain mode: the starting player then each answer, with the club they shared
   rankedTheme?: string; // id in RANKED_THEMES when the theme has a best-game board
+  challenge?: string; // code of the friend's challenge this game answers
 }
+/** End-of-game extras: well-known players missed, rarest ones found, and (daily) each answer's rarity tier for the share card. */
+export interface GameRecap {
+  missed: string[];
+  rarest: { name: string; pct?: number }[];
+  tiers?: number[]; // daily only: 1 to 3 per found player, in citation order
+}
+export interface Challenge {
+  code: string; mode: SoloMode; criterion: Criterion;
+  from: { pseudo: string; country: string; count: number };
+  takers: { pseudo: string; country: string; count: number; me?: boolean }[];
+}
+export interface DailyStreak { current: number; best: number; playedToday: boolean }
 export interface ChainLink { name: string; club?: string; seasons?: string }
 
 /** A player proposed while typing (from the whole base, so it never reveals the answers). */
@@ -119,6 +133,7 @@ export interface DailyInfo {
   difficulty: 'easy' | 'hard';
   played: GameState | null;
   playerCount: number; // players who took today's challenge
+  streak?: DailyStreak; // days in a row the player took the challenge
 }
 export interface DailyHistoryItem { date: string; number: number; criterion: Criterion; difficulty: 'easy' | 'hard'; myCount: number | null }
 
