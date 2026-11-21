@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useI18n } from '../i18n';
 import { fmtClock, themeLabel } from '../format';
-import { Leaderboard } from '../ui';
+import { ChainView, GuessInput, Leaderboard } from '../ui';
 import type { Nav } from '../App';
-import type { GameState, GuessOutcome, Meta } from '../../shared/types';
+import type { GameState, GuessOutcome, Meta, Suggestion } from '../../shared/types';
 import { MODE_RULES } from '../../shared/types';
 
 type Flash = { kind: 'ok' | 'duplicate' | 'wrong'; text: string; key: number };
@@ -14,11 +14,10 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
   const [g, setG] = useState<GameState | null>(null);
   const [offset, setOffset] = useState(0); // server clock - local clock
   const [now, setNow] = useState(Date.now());
-  const [text, setText] = useState('');
+  const [choices, setChoices] = useState<Suggestion[] | null>(null);
   const [flash, setFlash] = useState<Flash | null>(null);
   const [error, setError] = useState('');
   const queue = useRef(Promise.resolve());
-  const input = useRef<HTMLInputElement>(null);
   const ending = useRef(false);
 
   const accept = (s: GameState) => { setOffset(s.serverNow - Date.now()); setG(s); };
@@ -36,19 +35,17 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
 
   const show = (o: GuessOutcome) => {
     if (o.status === 'invalid') return;
+    if (o.status === 'ambiguous') { setChoices(o.options); return; }
     const textMsg = o.status === 'ok' ? `${t.ok} ${o.name}` : o.status === 'duplicate' ? `${t.duplicate} : ${o.name}` : o.name ? t.wrongKnown(o.name) : t.wrong;
     setFlash({ kind: o.status, text: textMsg, key: Date.now() });
     if ('vibrate' in navigator && o.status !== 'ok') navigator.vibrate?.(60);
   };
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const value = text.trim();
-    if (!value || g?.status !== 'active') return;
-    setText('');
+  const submit = (value: string, pick?: string) => {
+    if (g?.status !== 'active') return;
     queue.current = queue.current.then(async () => {
       try {
-        const r = await api.guess(id, value);
+        const r = await api.guess(id, value, pick);
         show(r.outcome);
         accept(r.state);
       } catch { /* network hiccup: the answer is dropped */ }
@@ -82,25 +79,13 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
           <div className="streak-bar"><span style={{ width: `${Math.max(0, Math.min(100, (remaining / (rules.streakSeconds * 1000)) * 100))}%` }} /></div>
         )}
       </div>
-      <form onSubmit={submit} className="guess-form">
-        <input
-          ref={input}
-          autoFocus
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder={t.typeHere}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="words"
-          spellCheck={false}
-          enterKeyHint="send"
-          maxLength={80}
-        />
-      </form>
+      <GuessInput onGuess={submit} suggestions={g.mode !== 'hardcore'} criterion={g.criterion} choices={choices} onClearChoices={() => setChoices(null)} placeholder={t.typeHere} />
       <div className="flash-slot">{flash && <div key={flash.key} className={`flash ${flash.kind}`}>{flash.text}</div>}</div>
-      <ol className="found" reversed>
-        {[...g.found].reverse().map((n, i) => <li key={g.found.length - i}>{n}</li>)}
-      </ol>
+      {g.chain ? <ChainView links={g.chain} /> : (
+        <ol className="found" reversed>
+          {[...g.found].reverse().map((n, i) => <li key={g.found.length - i}>{n}</li>)}
+        </ol>
+      )}
       <button className="link danger" onClick={stop}>{t.giveUp}</button>
     </div>
   );
@@ -108,6 +93,8 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
 
 function Result({ g, meta, nav, theme, title }: { g: GameState; meta: Meta; nav: Nav; theme: string; title: string }) {
   const { t } = useI18n();
+  // Best-game boards exist only for the big themes; other themes show the mode's weekly total.
+  const rankedId = g.rankedTheme;
   const [copied, setCopied] = useState(false);
   const share = async () => {
     const url = location.origin + (g.mode === 'daily' ? '/' : '/#/solo');
@@ -140,9 +127,15 @@ function Result({ g, meta, nav, theme, title }: { g: GameState; meta: Meta; nav:
         <h2>{t.leaderboards}</h2>
         {g.mode === 'daily'
           ? <Leaderboard mode="daily" date={g.dailyDate} meta={meta} rarity />
-          : <Leaderboard mode={g.mode} criterion={g.criterion} meta={meta} />}
+          : rankedId ? <Leaderboard mode={g.mode} theme={rankedId} meta={meta} />
+          : <><p className="hint">{t.boardTotal} · {t.boardTotalHint}</p><Leaderboard mode={g.mode} kind="total" meta={meta} /></>}
       </section>}
-      {g.found.length > 0 && (
+      {g.chain ? (
+        <section className="card">
+          <h2>{t.modes.chain}</h2>
+          <ChainView links={g.chain} done />
+        </section>
+      ) : g.found.length > 0 && (
         <section className="card">
           <h2>{t.found}</h2>
           <ol className="found">{g.found.map((n, i) => <li key={i}>{n}</li>)}</ol>

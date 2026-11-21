@@ -33,7 +33,17 @@ export const CRITERION_KEYS: (keyof Criterion)[] = [
   'heightMin', 'heightMax', 'tournament', 'tournamentWon', 'ucl', 'champion', 'topScorer', 'ballonDor',
 ];
 
-export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'unlimited' | 'hardcore' | 'streak' | 'daily';
+export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'timed15' | 'timed30' | 'timed60' | 'unlimited' | 'hardcore' | 'streak10' | 'streak' | 'streak30' | 'chain' | 'daily';
+
+/** Solo modes as shown in the setup: a group, with its variants (timer lengths) when it has several. */
+export const SOLO_GROUPS: { id: string; modes: SoloMode[]; default: SoloMode }[] = [
+  { id: 'timed', modes: ['timed1', 'timed3', 'timed10', 'timed15', 'timed30', 'timed60'], default: 'timed3' },
+  { id: 'unlimited', modes: ['unlimited'], default: 'unlimited' },
+  { id: 'hardcore', modes: ['hardcore'], default: 'hardcore' },
+  { id: 'streak', modes: ['streak10', 'streak', 'streak30'], default: 'streak' },
+  { id: 'chain', modes: ['chain'], default: 'chain' },
+];
+export const SOLO_MODES: SoloMode[] = SOLO_GROUPS.flatMap((g) => g.modes);
 
 /** Timers in seconds. duration = total time; streakSeconds = time left resets on each right answer;
  * idleSeconds = game ends after this long without an answer; suddenDeath = one mistake or duplicate ends it. */
@@ -41,10 +51,16 @@ export const MODE_RULES: Record<SoloMode, { duration?: number; streakSeconds?: n
   timed1: { duration: 60 },
   timed3: { duration: 180 },
   timed10: { duration: 600 },
+  timed15: { duration: 900 },
+  timed30: { duration: 1800 },
+  timed60: { duration: 3600 },
   daily: { duration: 300 },
   unlimited: { idleSeconds: 600 },
   hardcore: { idleSeconds: 60, suddenDeath: true },
-  streak: { streakSeconds: 15 },
+  streak10: { streakSeconds: 10 },
+  streak: { streakSeconds: 20 },
+  streak30: { streakSeconds: 30 },
+  chain: { streakSeconds: 30 }, // each answer must be a teammate of the previous player
 };
 
 /** l = seasons (start years) played in each league, since the first season of the dataset. */
@@ -58,7 +74,10 @@ export interface Meta {
   playerCount: number;
   nationalities: string[]; // codes present in the data, most frequent first
   tournaments: MetaTournament[];
+  auth?: { google: string | null; email: boolean }; // optional sign-in methods configured on the server
 }
+
+export type SignInResult = { status: 'linked'; email: string } | { status: 'no_profile' } | { status: 'signed_in'; email: string; session: Profile & { id: string; secret: string } };
 
 export interface Profile { pseudo: string; club: string; country: string }
 
@@ -78,9 +97,16 @@ export interface GameState {
   total?: number;
   dailyDate?: string;
   archive?: boolean; // replay of a past daily challenge, not ranked
+  chain?: ChainLink[]; // chain mode: the starting player then each answer, with the club they shared
+  rankedTheme?: string; // id in RANKED_THEMES when the theme has a best-game board
 }
+export interface ChainLink { name: string; club?: string; seasons?: string }
 
+/** A player proposed while typing (from the whole base, so it never reveals the answers). */
+/** A player in a list. Details (birth year, nationality, position, main club, seasons) only come with homonyms, and never one tied to the theme. */
+export interface Suggestion { q: string; n: string; y?: number; c?: string; p?: Position; club?: string; from?: number; to?: number }
 export type GuessOutcome =
+  | { status: 'ambiguous'; options: Suggestion[] } // several well-known players share this name: pick one (not counted)
   | { status: 'ok'; name: string }
   | { status: 'duplicate'; name: string }
   | { status: 'wrong'; name?: string }
@@ -101,21 +127,48 @@ export interface LeaderboardRow { rank: number; pseudo: string; club: string; co
 export type Ranking = 'count' | 'rarity';
 
 // ----- Multiplayer rooms -----
-export type RoomGame = 'bomb' | 'duel';
-export interface RoomPlayer { id: string; pseudo: string; club: string; country: string; lives: number; connected: boolean; host: boolean }
+export type RoomGame = 'bomb' | 'duel' | 'chain' | 'royale';
+export const DUEL_SECONDS = [15, 25, 35];
+export const DUEL_DEFAULT_SECONDS = 25;
+export interface RoomPlayer { id: string; pseudo: string; club: string; country: string; lives: number; connected: boolean; host: boolean; found?: number; roundFound?: number }
 export interface RoomState {
   code: string;
   game: RoomGame;
   criterion: Criterion;
   phase: 'lobby' | 'playing' | 'ended';
   players: RoomPlayer[];
-  turn: string | null; // bomb: holder; duel: player the ball is heading to
+  turn: string | null; // bomb: holder; duel: player the ball is heading to; chain: player who must answer; royale: null (everyone plays)
+  deadline?: number; // chain: end of the current turn; royale: end of the current round
   ball?: { pos: number; dir: -1 | 1; speed: number; at: number }; // duel: pos 0 = first player, 1 = second
   round: number;
   cited: string[];
   winner: string | null;
-  lastEvent?: { kind: 'ok' | 'wrong' | 'duplicate' | 'boom' | 'hit'; player: string; name?: string };
+  chain?: ChainLink[]; // chain: the current chain, oldest first
+  duelSeconds?: number; // duel: time for the ball to go from the centre to a goal (host setting)
+  lastEvent?: { kind: 'ok' | 'wrong' | 'duplicate' | 'boom' | 'hit' | 'timeout' | 'out' | 'restart'; player: string; name?: string; players?: string[] };
   serverNow: number;
 }
-export type RoomClientMsg = { t: 'start' } | { t: 'guess'; text: string } | { t: 'criterion'; criterion: Criterion };
-export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; message: string } | { t: 'you'; id: string };
+export type RoomClientMsg = { t: 'start' } | { t: 'guess'; text: string; pick?: string } | { t: 'criterion'; criterion: Criterion } | { t: 'settings'; duelSeconds: number };
+export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; message: string } | { t: 'you'; id: string } | { t: 'outcome'; outcome: GuessOutcome };
+
+// ----- Clubs & countries war -----
+/** key = club Wikidata id or country code; points = sum of the supporters' daily challenge counts. */
+export interface WarRow { rank: number; key: string; points: number; players: number }
+export interface WarBoard { by: 'club' | 'country'; period: 'week' | 'all'; from: string; rows: WarRow[]; me: WarRow | null; total: number }
+
+// ----- Rankings -----
+/** Themes with a best-game leaderboard: the 5 leagues together, each league, the World Cup. */
+export const RANKED_THEMES: { id: string; criterion: Criterion }[] = [
+  { id: 'all', criterion: {} },
+  { id: 'PL', criterion: { league: 'PL' } },
+  { id: 'L1', criterion: { league: 'L1' } },
+  { id: 'LL', criterion: { league: 'LL' } },
+  { id: 'SA', criterion: { league: 'SA' } },
+  { id: 'BL', criterion: { league: 'BL' } },
+  { id: 'WC', criterion: { tournament: 'WC' } },
+];
+/** total = players named over the period, all themes together; best = best single game on a ranked theme. */
+export type BoardKind = 'total' | 'best';
+export type BoardPeriod = 'day' | 'week' | 'month' | 'year' | 'all';
+/** "Top 5 % in Ligue 1": share of players with fewer players named (all modes, all time) in that league. */
+export interface Badge { scope: string; top: number; rank: number; total: number }

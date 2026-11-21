@@ -58,13 +58,11 @@ describe('themes', () => {
     expect(n).toBeGreaterThan(350);
     expect(n).toBeLessThan(900);
   });
-  it('homonyms: surname gives the most famous uncited player first', () => {
+  it('homonyms: a shared surname asks which one, then gives the one left', () => {
     const c = { club: q('Manchester United F.C.') };
-    const first = guess(c, 'Neville');
-    expect(first.status).toBe('ok');
-    const second = guess(c, 'Neville', [first.name!]);
-    expect(second.status).toBe('ok');
-    expect(second.name).not.toBe(first.name);
+    expect(guess(c, 'Neville').status).toBe('ambiguous');
+    const second = guess(c, 'Neville', ['Gary Neville']);
+    expect(second).toEqual({ status: 'ok', name: 'Phil Neville' });
   });
   it('club index lookups work', () => {
     expect(clubIndex(q('Paris Saint-Germain FC'))).toBeTypeOf('number');

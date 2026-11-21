@@ -1,5 +1,5 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode } from '../shared/types';
+import type { SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
 
 export interface Session extends Profile { id: string; secret: string }
 
@@ -32,19 +32,26 @@ export const api = {
   meta: () => call<Meta>('GET', '/meta'),
   themeSize: (criterion: Criterion) => call<{ size: number }>('POST', '/theme/size', { criterion }),
   saveProfile: (p: Profile) => call<Profile & { id: string; secret?: string }>('POST', '/profile', p),
-  recover: (code: string) => call<Session>('POST', '/profile/recover', { code }),
+  account: () => call<{ email: string; provider: string } | null>('GET', '/account'),
+  signInGoogle: (credential: string) => call<SignInResult>('POST', '/auth/google', { credential }),
+  sendEmailLink: (email: string, lang: string) => call<{ ok: true }>('POST', '/auth/email', { email, lang }),
+  verifyEmailLink: (token: string) => call<SignInResult>('POST', '/auth/email/verify', { token }),
   startGame: (mode: SoloMode, criterion?: Criterion, date?: string) => call<GameState>('POST', '/games', { mode, criterion, date }),
   game: (id: string) => call<GameState>('GET', `/games/${id}`),
-  guess: (id: string, text: string) => call<{ outcome: GuessOutcome; state: GameState }>('POST', `/games/${id}/guess`, { text }),
+  guess: (id: string, text: string, pick?: string) => call<{ outcome: GuessOutcome; state: GameState }>('POST', `/games/${id}/guess`, { text, ...(pick ? { pick } : {}) }),
+  suggest: (q: string, criterion?: Criterion) => call<Suggestion[]>('GET', `/suggest?q=${encodeURIComponent(q)}${criterion ? '&c=' + encodeURIComponent(JSON.stringify(criterion)) : ''}`),
   finish: (id: string) => call<GameState>('POST', `/games/${id}/finish`),
   daily: () => call<DailyInfo>('GET', '/daily'),
   dailyHistory: () => call<DailyHistoryItem[]>('GET', '/daily/history'),
-  leaderboard: (p: { mode: SoloMode; criterion?: Criterion; period?: 'day' | 'week' | 'all'; ranking?: Ranking; date?: string }) => {
-    const q = new URLSearchParams({ mode: p.mode, period: p.period ?? 'all', ranking: p.ranking ?? 'count' });
+  war: (by: 'club' | 'country', period: 'week' | 'all') => call<WarBoard>('GET', `/war?by=${by}&period=${period}`),
+  leaderboard: (p: { mode: SoloMode; kind?: BoardKind; theme?: string; period?: BoardPeriod; ranking?: Ranking; date?: string }) => {
+    const q = new URLSearchParams({ mode: p.mode, kind: p.kind ?? 'best', ranking: p.ranking ?? 'count' });
+    if (p.period) q.set('period', p.period);
+    if (p.theme) q.set('theme', p.theme);
     if (p.date) q.set('date', p.date);
-    for (const [k, v] of Object.entries(p.criterion ?? {})) if (v !== undefined) q.set(k, String(v));
-    return call<{ total: number; rows: LeaderboardRow[]; me: LeaderboardRow | null }>('GET', '/leaderboard?' + q);
+    return call<{ total: number; dist?: { width: number; counts: number[] }; rows: LeaderboardRow[]; me: LeaderboardRow | null }>('GET', '/leaderboard?' + q);
   },
+  badges: () => call<Badge[]>('GET', '/badges'),
   createRoom: (game: RoomGame, criterion: Criterion) => call<{ code: string }>('POST', '/rooms', { game, criterion }),
   roomSocketUrl: (code: string) => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';

@@ -34,22 +34,24 @@ League, club, seasons, plus: position, nationality, international, age, height, 
 
 ## Answer matching (`worker/data.ts`, `worker/normalize.ts`)
 
-No autocomplete: the player has to remember the name. Matching is tolerant:
+Answers are typed freely (Enter) or picked from suggestions. Matching is tolerant:
 
 - case, accents, punctuation and spaces are ignored (`Ozil` = `Özil`, `vanpersie` = `van Persie`);
 - full names, Wikidata aliases and labels in 7 languages are accepted, so are surnames alone (`Henry`), with particles (`De Bruyne`);
 - typos: 1 to 2 edits depending on length (stricter in Hardcore);
-- homonyms: the most famous player not yet named is credited, so `Neville` twice gives Gary then Phil;
+- homonyms: when a bare surname fits several players of similar fame (`Fofana`, `Neville`), the player is asked which one (it doesn't count as an answer, even in Hardcore); otherwise the most famous player not yet named is credited;
+- suggestions: from 3 letters, players of the **whole base** whose name starts with the typed letters are listed (so they never give the answer away). Picking one answers with that exact player. Every mode has them except solo Hardcore;
 - a real player outside the theme gets a specific message ("not in this theme").
 
 ## Game rules
 
 | Mode | Rule |
 | --- | --- |
-| 1 / 3 / 10 minutes | Name as many as possible before the clock runs out |
+| Against the clock | 1, 3, 10, 15, 30 minutes or 1 hour: name as many as possible before the end |
 | Unlimited | No clock; ends after 10 minutes without an answer |
 | Hardcore | One mistake or repeat ends the game; 60 s per answer |
-| Streak | 15 s on the clock, each right answer resets it |
+| Streak | 10, 20 (default) or 30 s on the clock, each right answer resets it |
+| Chain | Starts from a well-known player of the theme: each answer must be a teammate of the previous one (same club, overlapping seasons, within the theme). 30 s per link |
 | Daily | Same theme for everyone, 5 minutes, one ranked attempt per profile. Alternates easy and hard days |
 
 The server owns the clock and validates every answer, so scores can't be forged from the browser. A profile can start 80 games per hour.
@@ -58,7 +60,13 @@ Daily challenge leaderboards: number of players named, and **rarity points** (1 
 
 **Bomb** (2 to 10 players): the holder must name a valid player to pass the bomb to the next player. A hidden fuse (15 to 45 s) explodes in someone's hands: they lose one of their 2 lives. Last one standing wins.
 
-**Duel** (2 players): the ball starts at the centre and rolls towards a player (20 s to reach them). Naming a valid player sends it back from where it is, a bit faster each time. The one it reaches loses.
+**Duel** (2 players): the ball starts at the centre and rolls towards a player's goal (25 s from the centre by default; the host can choose 15, 25 or 35 s). Naming a valid player sends it back from where it is, a bit faster each time. The one it reaches loses.
+
+**Chain** (2 to 10 players): in turn, name a teammate of the last player of the chain within 20 s, or lose one of 2 lives. If every teammate has been named, a new chain starts.
+
+**Battle royale** (2 to 20 players): everyone answers at once, each player can be named only once in the room. Rounds last 30 s, then 2 s less each round (15 s minimum). At the end of a round, whoever named the fewest players is out (ties go out together, unless everyone is tied). Last one standing wins.
+
+**Clubs & countries war**: each profile's daily challenge results (players named) add up for their club and their country, by week (Monday to Sunday, Paris time) or all time. Only the daily challenge counts, so playing more games doesn't help.
 
 ## Profiles
 
@@ -75,6 +83,15 @@ npm test
 
 ## Deploy (Cloudflare)
 
+**From GitHub (recommended)**: `.github/workflows/deploy.yml` deploys on every push to `main` or `preview`, or by hand from the Actions tab. It creates the D1 database on the first run, applies the migrations, builds and deploys. It needs two repository secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`: shown on the Cloudflare dashboard (Workers & Pages, right column).
+- `CLOUDFLARE_API_TOKEN`: My Profile → API Tokens → Create Token → "Edit Cloudflare Workers" template, then add the permission Account → D1 → Edit.
+
+The site is served at `https://name-the-players.<your-subdomain>.workers.dev`. A new account must open Workers & Pages once to pick its workers.dev subdomain.
+
+**From your computer**:
+
 ```bash
 npx wrangler login
 npx wrangler d1 create name-the-players   # copy the database_id into wrangler.jsonc
@@ -82,4 +99,4 @@ npm run db:migrate:remote
 npm run deploy
 ```
 
-The Workers Paid plan ($5/month) is recommended for launch: the free plan's 10 ms CPU limit per request is too tight for name matching on large themes.
+The free plan allows 100,000 requests a day and 10 ms of CPU per request. Name matching on the largest themes is close to that limit: if answers start failing, move to the Workers Paid plan ($5/month).

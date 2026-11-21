@@ -1,13 +1,20 @@
 // Multiplayer room (one Durable Object per room code). The object is the referee:
 // it owns the clock, the bomb/ball and validates every answer.
 import { DurableObject } from 'cloudflare:workers';
-import { getMatcher, matchGuess, normalizeCriterion, playerName, scopeSize } from './data';
+import { getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, scopeSize, describeList, type Matcher } from './data';
+import { chainMatcher, chainStart, clubLabel, seasonLabel, teammates } from './chain';
+import { DUEL_DEFAULT_SECONDS, DUEL_SECONDS } from '../shared/types';
 import type { Criterion, RoomClientMsg, RoomGame, RoomPlayer, RoomServerMsg, RoomState } from '../shared/types';
 
-export const ROOM_LIMITS: Record<RoomGame, { min: number; max: number }> = { bomb: { min: 2, max: 10 }, duel: { min: 2, max: 2 } };
+export const ROOM_LIMITS: Record<RoomGame, { min: number; max: number }> = {
+  bomb: { min: 2, max: 10 }, duel: { min: 2, max: 2 }, chain: { min: 2, max: 10 }, royale: { min: 2, max: 20 },
+};
+const CHAIN_LIVES = 2;
+const CHAIN_TURN_MS = 20_000;
+const ROYALE_ROUND_MS = [30_000, 15_000]; // first round, shortest round (2 s less each round)
+const MIN_GUESS_INTERVAL_MS = 150;
 const BOMB_LIVES = 2;
 const BOMB_FUSE = [15_000, 45_000]; // random fuse length per round, hidden from players
-const DUEL_HALF_MS = 20_000; // time for the ball to go from the centre to a player
 const DUEL_ACCEL = 1.06; // ball speeds up after each answer
 const MIN_THEME_SIZE = 30;
 
@@ -18,6 +25,8 @@ export class Room extends DurableObject<Env> {
   private sockets = new Map<WebSocket, string>();
   private cited = new Set<number>();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private chainLast = -1; // chain: last player of the chain
+  private lastGuess = new Map<string, number>();
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -39,7 +48,7 @@ export class Room extends DurableObject<Env> {
     if (!p) {
       if (this.s.phase !== 'lobby') { send({ t: 'error', message: 'started' }); server.close(4000, 'started'); return new Response(null, { status: 101, webSocket: client }); }
       if (this.s.players.length >= ROOM_LIMITS[this.s.game].max) { send({ t: 'error', message: 'full' }); server.close(4001, 'full'); return new Response(null, { status: 101, webSocket: client }); }
-      p = { ...who, lives: BOMB_LIVES, connected: true, host: this.s.players.length === 0 };
+      p = { ...who, lives: 0, connected: true, host: this.s.players.length === 0 };
       this.s.players.push(p);
     }
     p.connected = true;
@@ -76,6 +85,9 @@ export class Room extends DurableObject<Env> {
       const c = normalizeCriterion(msg.criterion ?? {});
       if (scopeSize(c) < MIN_THEME_SIZE) return send({ t: 'error', message: 'theme_too_small' });
       s.criterion = c;
+    } else if (msg.t === 'settings') {
+      if (!me.host || s.phase === 'playing' || s.game !== 'duel' || !DUEL_SECONDS.includes(msg.duelSeconds)) return;
+      s.duelSeconds = msg.duelSeconds;
     } else if (msg.t === 'start') {
       if (!me.host || s.phase === 'playing') return;
       const live = s.players.filter((p) => p.connected);
@@ -83,8 +95,13 @@ export class Room extends DurableObject<Env> {
       s.players = live;
       this.start();
     } else if (msg.t === 'guess') {
-      if (s.phase !== 'playing' || s.turn !== id || typeof msg.text !== 'string') return;
-      this.guess(me, msg.text.slice(0, 80));
+      if (s.phase !== 'playing' || typeof msg.text !== 'string') return;
+      const now = Date.now();
+      if (now - (this.lastGuess.get(id) ?? 0) < MIN_GUESS_INTERVAL_MS) return;
+      this.lastGuess.set(id, now);
+      if (s.game === 'royale') {
+        if (me.lives > 0) this.royaleGuess(me, msg.text.slice(0, 80), msg.pick, send);
+      } else if (s.turn === id) this.guess(me, msg.text.slice(0, 80), msg.pick, send);
     }
     this.broadcast();
   }
@@ -97,22 +114,41 @@ export class Room extends DurableObject<Env> {
     s.winner = null;
     s.lastEvent = undefined;
     s.round = 1;
-    for (const p of s.players) p.lives = s.game === 'bomb' ? BOMB_LIVES : 1;
-    if (s.game === 'bomb') {
+    s.chain = undefined;
+    s.deadline = undefined;
+    for (const p of s.players) { p.lives = s.game === 'bomb' ? BOMB_LIVES : s.game === 'chain' ? CHAIN_LIVES : 1; p.found = 0; p.roundFound = 0; }
+    if (s.game === 'chain') {
+      s.turn = s.players[Math.floor(Math.random() * s.players.length)].id;
+      this.newChain();
+      if (s.phase === 'playing') this.armTurn();
+    } else if (s.game === 'royale') {
+      s.turn = null;
+      this.armRound();
+    } else if (s.game === 'bomb') {
       s.turn = s.players[Math.floor(Math.random() * s.players.length)].id;
       this.armFuse();
     } else {
       const dir = Math.random() < 0.5 ? -1 : 1;
-      s.ball = { pos: 0.5, dir, speed: 0.5 / DUEL_HALF_MS, at: Date.now() };
+      s.ball = { pos: 0.5, dir, speed: 0.5 / ((s.duelSeconds ?? DUEL_DEFAULT_SECONDS) * 1000), at: Date.now() };
       s.turn = s.players[dir === -1 ? 0 : 1].id;
       this.scheduleHit();
     }
   }
 
-  private guess(me: RoomPlayer, text: string) {
+  /** Resolves typed text or a picked player. Ambiguous names are sent back privately to choose from. */
+  private resolve(m: Matcher, text: string, pick: string | undefined, send: (m: RoomServerMsg) => void) {
+    const picked = typeof pick === 'string' ? playerIndex(pick) : undefined;
+    if (pick !== undefined && picked === undefined) return null;
+    const res = picked !== undefined ? matchPick(m, picked, this.cited) : matchGuess(m, text, this.cited);
+    if (res.status === 'ambiguous') { send({ t: 'outcome', outcome: { status: 'ambiguous', options: describeList(res.options, this.s!.criterion) } }); return null; }
+    return res;
+  }
+
+  private guess(me: RoomPlayer, text: string, pick: string | undefined, send: (m: RoomServerMsg) => void) {
     const s = this.s!;
-    const res = matchGuess(getMatcher(s.criterion), text, this.cited);
-    if (res.status === 'invalid') return;
+    const matcher = s.game === 'chain' ? chainMatcher(this.chainLast, s.criterion) : getMatcher(s.criterion);
+    const res = this.resolve(matcher, text, pick, send);
+    if (!res || res.status === 'invalid') return;
     if (res.status !== 'ok') {
       s.lastEvent = { kind: res.status, player: me.id, name: res.player !== undefined ? playerName(res.player) : undefined };
       return;
@@ -120,7 +156,14 @@ export class Room extends DurableObject<Env> {
     this.cited.add(res.player);
     s.cited.push(playerName(res.player));
     s.lastEvent = { kind: 'ok', player: me.id, name: playerName(res.player) };
-    if (s.game === 'bomb') {
+    me.found = (me.found ?? 0) + 1;
+    if (s.game === 'chain') {
+      const l = teammates(this.chainLast).get(res.player);
+      s.chain!.push({ name: playerName(res.player), ...(l ? { club: clubLabel(l.club), seasons: seasonLabel(l.from, l.to) } : {}) });
+      this.chainLast = res.player;
+      s.turn = this.nextAlive(me.id);
+      this.armTurn();
+    } else if (s.game === 'bomb') {
       s.turn = this.nextAlive(me.id);
     } else {
       const b = s.ball!;
@@ -132,6 +175,100 @@ export class Room extends DurableObject<Env> {
       s.turn = s.players[b.dir === -1 ? 0 : 1].id;
       this.scheduleHit();
     }
+  }
+
+  // ----- Chain of teammates -----
+  private newChain() {
+    const s = this.s!;
+    const start = chainStart(s.criterion);
+    if (start === null) { this.end(null); return; }
+    this.chainLast = start;
+    this.cited.add(start);
+    s.chain = [{ name: playerName(start) }];
+  }
+
+  private armTurn() {
+    if (this.timer) clearTimeout(this.timer);
+    this.s!.deadline = Date.now() + CHAIN_TURN_MS;
+    this.timer = setTimeout(() => this.turnTimeout(), CHAIN_TURN_MS);
+  }
+
+  private turnTimeout() {
+    const s = this.s!;
+    if (s.phase !== 'playing' || !s.turn) return;
+    const holder = s.players.find((p) => p.id === s.turn)!;
+    holder.lives--;
+    s.lastEvent = { kind: 'timeout', player: holder.id };
+    const alive = s.players.filter((p) => p.lives > 0);
+    if (alive.length <= 1) return this.end(alive[0]?.id ?? null);
+    s.round++;
+    // Dead end (every teammate already named): start a new chain.
+    const left = [...chainMatcher(this.chainLast, s.criterion).scope.players].some((p) => !this.cited.has(p));
+    if (!left) {
+      this.newChain();
+      if (s.phase !== 'playing') return;
+      s.lastEvent = { kind: 'restart', player: holder.id };
+    }
+    s.turn = this.nextAlive(holder.id);
+    this.armTurn();
+    this.broadcast();
+  }
+
+  // ----- Battle royale: everyone answers at once, the weakest of each round is out -----
+  private royaleGuess(me: RoomPlayer, text: string, pick: string | undefined, send: (m: RoomServerMsg) => void) {
+    const s = this.s!;
+    const res = this.resolve(getMatcher(s.criterion), text, pick, send);
+    if (!res || res.status === 'invalid') return;
+    if (res.status !== 'ok') {
+      send({ t: 'outcome', outcome: res.status === 'duplicate' ? { status: 'duplicate', name: playerName(res.player) } : { status: 'wrong', name: res.player !== undefined ? playerName(res.player) : undefined } });
+      return;
+    }
+    this.cited.add(res.player);
+    s.cited.push(playerName(res.player));
+    me.found = (me.found ?? 0) + 1;
+    me.roundFound = (me.roundFound ?? 0) + 1;
+    s.lastEvent = { kind: 'ok', player: me.id, name: playerName(res.player) };
+    send({ t: 'outcome', outcome: { status: 'ok', name: playerName(res.player) } });
+  }
+
+  private armRound() {
+    if (this.timer) clearTimeout(this.timer);
+    const ms = Math.max(ROYALE_ROUND_MS[1], ROYALE_ROUND_MS[0] - (this.s!.round - 1) * 2000);
+    this.s!.deadline = Date.now() + ms;
+    this.timer = setTimeout(() => this.endRound(), ms);
+  }
+
+  private endRound() {
+    const s = this.s!;
+    if (s.phase !== 'playing') return;
+    const alive = s.players.filter((p) => p.lives > 0);
+    const min = Math.min(...alive.map((p) => p.roundFound ?? 0));
+    const losers = alive.filter((p) => (p.roundFound ?? 0) === min);
+    if (losers.length < alive.length) {
+      for (const p of losers) p.lives = 0;
+      s.lastEvent = { kind: 'out', player: losers[0].id, players: losers.map((p) => p.id) };
+    } else if (min === 0 && s.round >= 3) {
+      // Nobody can answer any more: the best total wins.
+      const best = Math.max(...alive.map((p) => p.found ?? 0));
+      const top = alive.filter((p) => (p.found ?? 0) === best);
+      return this.end(top.length === 1 ? top[0].id : null);
+    } else s.lastEvent = undefined;
+    for (const p of s.players) p.roundFound = 0;
+    const still = s.players.filter((p) => p.lives > 0);
+    if (still.length <= 1) return this.end(still[0]?.id ?? null);
+    s.round++;
+    this.armRound();
+    this.broadcast();
+  }
+
+  private end(winner: string | null) {
+    const s = this.s!;
+    if (this.timer) clearTimeout(this.timer);
+    s.phase = 'ended';
+    s.winner = winner;
+    s.turn = null;
+    s.deadline = undefined;
+    this.broadcast();
   }
 
   private nextAlive(fromId: string): string {
