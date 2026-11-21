@@ -33,7 +33,17 @@ export const CRITERION_KEYS: (keyof Criterion)[] = [
   'heightMin', 'heightMax', 'tournament', 'tournamentWon', 'ucl', 'champion', 'topScorer', 'ballonDor',
 ];
 
-export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'unlimited' | 'hardcore' | 'streak' | 'chain' | 'daily';
+export type SoloMode = 'timed1' | 'timed3' | 'timed10' | 'timed15' | 'timed30' | 'timed60' | 'unlimited' | 'hardcore' | 'streak10' | 'streak' | 'streak30' | 'chain' | 'daily';
+
+/** Solo modes as shown in the setup: a group, with its variants (timer lengths) when it has several. */
+export const SOLO_GROUPS: { id: string; modes: SoloMode[]; default: SoloMode }[] = [
+  { id: 'timed', modes: ['timed1', 'timed3', 'timed10', 'timed15', 'timed30', 'timed60'], default: 'timed3' },
+  { id: 'unlimited', modes: ['unlimited'], default: 'unlimited' },
+  { id: 'hardcore', modes: ['hardcore'], default: 'hardcore' },
+  { id: 'streak', modes: ['streak10', 'streak', 'streak30'], default: 'streak' },
+  { id: 'chain', modes: ['chain'], default: 'chain' },
+];
+export const SOLO_MODES: SoloMode[] = SOLO_GROUPS.flatMap((g) => g.modes);
 
 /** Timers in seconds. duration = total time; streakSeconds = time left resets on each right answer;
  * idleSeconds = game ends after this long without an answer; suddenDeath = one mistake or duplicate ends it. */
@@ -41,10 +51,15 @@ export const MODE_RULES: Record<SoloMode, { duration?: number; streakSeconds?: n
   timed1: { duration: 60 },
   timed3: { duration: 180 },
   timed10: { duration: 600 },
+  timed15: { duration: 900 },
+  timed30: { duration: 1800 },
+  timed60: { duration: 3600 },
   daily: { duration: 300 },
   unlimited: { idleSeconds: 600 },
   hardcore: { idleSeconds: 60, suddenDeath: true },
-  streak: { streakSeconds: 15 },
+  streak10: { streakSeconds: 10 },
+  streak: { streakSeconds: 20 },
+  streak30: { streakSeconds: 30 },
   chain: { streakSeconds: 30 }, // each answer must be a teammate of the previous player
 };
 
@@ -83,7 +98,10 @@ export interface GameState {
 }
 export interface ChainLink { name: string; club?: string; seasons?: string }
 
+/** A player proposed while typing (from the whole base, so it never reveals the answers). */
+export interface Suggestion { q: string; n: string; y?: number; c?: string; p?: Position }
 export type GuessOutcome =
+  | { status: 'ambiguous'; options: Suggestion[] } // several well-known players share this name: pick one (not counted)
   | { status: 'ok'; name: string }
   | { status: 'duplicate'; name: string }
   | { status: 'wrong'; name?: string }
@@ -105,6 +123,8 @@ export type Ranking = 'count' | 'rarity';
 
 // ----- Multiplayer rooms -----
 export type RoomGame = 'bomb' | 'duel' | 'chain' | 'royale';
+export const DUEL_SECONDS = [15, 25, 35];
+export const DUEL_DEFAULT_SECONDS = 25;
 export interface RoomPlayer { id: string; pseudo: string; club: string; country: string; lives: number; connected: boolean; host: boolean; found?: number; roundFound?: number }
 export interface RoomState {
   code: string;
@@ -119,10 +139,11 @@ export interface RoomState {
   cited: string[];
   winner: string | null;
   chain?: ChainLink[]; // chain: the current chain, oldest first
+  duelSeconds?: number; // duel: time for the ball to go from the centre to a goal (host setting)
   lastEvent?: { kind: 'ok' | 'wrong' | 'duplicate' | 'boom' | 'hit' | 'timeout' | 'out' | 'restart'; player: string; name?: string; players?: string[] };
   serverNow: number;
 }
-export type RoomClientMsg = { t: 'start' } | { t: 'guess'; text: string } | { t: 'criterion'; criterion: Criterion };
+export type RoomClientMsg = { t: 'start' } | { t: 'guess'; text: string; pick?: string } | { t: 'criterion'; criterion: Criterion } | { t: 'settings'; duelSeconds: number };
 export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; message: string } | { t: 'you'; id: string } | { t: 'outcome'; outcome: GuessOutcome };
 
 // ----- Clubs & countries war -----

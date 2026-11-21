@@ -1,5 +1,5 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, WarBoard } from '../shared/types';
+import type { Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard } from '../shared/types';
 
 export interface Session extends Profile { id: string; secret: string }
 
@@ -35,7 +35,8 @@ export const api = {
   recover: (code: string) => call<Session>('POST', '/profile/recover', { code }),
   startGame: (mode: SoloMode, criterion?: Criterion, date?: string) => call<GameState>('POST', '/games', { mode, criterion, date }),
   game: (id: string) => call<GameState>('GET', `/games/${id}`),
-  guess: (id: string, text: string) => call<{ outcome: GuessOutcome; state: GameState }>('POST', `/games/${id}/guess`, { text }),
+  guess: (id: string, text: string, pick?: string) => call<{ outcome: GuessOutcome; state: GameState }>('POST', `/games/${id}/guess`, { text, ...(pick ? { pick } : {}) }),
+  suggest: (q: string) => call<Suggestion[]>('GET', `/suggest?q=${encodeURIComponent(q)}`),
   finish: (id: string) => call<GameState>('POST', `/games/${id}/finish`),
   daily: () => call<DailyInfo>('GET', '/daily'),
   dailyHistory: () => call<DailyHistoryItem[]>('GET', '/daily/history'),

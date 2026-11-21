@@ -1,8 +1,9 @@
 // Multiplayer room (one Durable Object per room code). The object is the referee:
 // it owns the clock, the bomb/ball and validates every answer.
 import { DurableObject } from 'cloudflare:workers';
-import { getMatcher, matchGuess, normalizeCriterion, playerName, scopeSize } from './data';
+import { getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, scopeSize, suggestion, type Matcher } from './data';
 import { chainMatcher, chainStart, clubLabel, seasonLabel, teammates } from './chain';
+import { DUEL_DEFAULT_SECONDS, DUEL_SECONDS } from '../shared/types';
 import type { Criterion, RoomClientMsg, RoomGame, RoomPlayer, RoomServerMsg, RoomState } from '../shared/types';
 
 export const ROOM_LIMITS: Record<RoomGame, { min: number; max: number }> = {
@@ -14,7 +15,6 @@ const ROYALE_ROUND_MS = [30_000, 15_000]; // first round, shortest round (2 s le
 const MIN_GUESS_INTERVAL_MS = 150;
 const BOMB_LIVES = 2;
 const BOMB_FUSE = [15_000, 45_000]; // random fuse length per round, hidden from players
-const DUEL_HALF_MS = 20_000; // time for the ball to go from the centre to a player
 const DUEL_ACCEL = 1.06; // ball speeds up after each answer
 const MIN_THEME_SIZE = 30;
 
@@ -85,6 +85,9 @@ export class Room extends DurableObject<Env> {
       const c = normalizeCriterion(msg.criterion ?? {});
       if (scopeSize(c) < MIN_THEME_SIZE) return send({ t: 'error', message: 'theme_too_small' });
       s.criterion = c;
+    } else if (msg.t === 'settings') {
+      if (!me.host || s.phase === 'playing' || s.game !== 'duel' || !DUEL_SECONDS.includes(msg.duelSeconds)) return;
+      s.duelSeconds = msg.duelSeconds;
     } else if (msg.t === 'start') {
       if (!me.host || s.phase === 'playing') return;
       const live = s.players.filter((p) => p.connected);
@@ -97,8 +100,8 @@ export class Room extends DurableObject<Env> {
       if (now - (this.lastGuess.get(id) ?? 0) < MIN_GUESS_INTERVAL_MS) return;
       this.lastGuess.set(id, now);
       if (s.game === 'royale') {
-        if (me.lives > 0) this.royaleGuess(me, msg.text.slice(0, 80), send);
-      } else if (s.turn === id) this.guess(me, msg.text.slice(0, 80));
+        if (me.lives > 0) this.royaleGuess(me, msg.text.slice(0, 80), msg.pick, send);
+      } else if (s.turn === id) this.guess(me, msg.text.slice(0, 80), msg.pick, send);
     }
     this.broadcast();
   }
@@ -126,17 +129,26 @@ export class Room extends DurableObject<Env> {
       this.armFuse();
     } else {
       const dir = Math.random() < 0.5 ? -1 : 1;
-      s.ball = { pos: 0.5, dir, speed: 0.5 / DUEL_HALF_MS, at: Date.now() };
+      s.ball = { pos: 0.5, dir, speed: 0.5 / ((s.duelSeconds ?? DUEL_DEFAULT_SECONDS) * 1000), at: Date.now() };
       s.turn = s.players[dir === -1 ? 0 : 1].id;
       this.scheduleHit();
     }
   }
 
-  private guess(me: RoomPlayer, text: string) {
+  /** Resolves typed text or a picked player. Ambiguous names are sent back privately to choose from. */
+  private resolve(m: Matcher, text: string, pick: string | undefined, send: (m: RoomServerMsg) => void) {
+    const picked = typeof pick === 'string' ? playerIndex(pick) : undefined;
+    if (pick !== undefined && picked === undefined) return null;
+    const res = picked !== undefined ? matchPick(m, picked, this.cited) : matchGuess(m, text, this.cited);
+    if (res.status === 'ambiguous') { send({ t: 'outcome', outcome: { status: 'ambiguous', options: res.options.map(suggestion) } }); return null; }
+    return res;
+  }
+
+  private guess(me: RoomPlayer, text: string, pick: string | undefined, send: (m: RoomServerMsg) => void) {
     const s = this.s!;
     const matcher = s.game === 'chain' ? chainMatcher(this.chainLast, s.criterion) : getMatcher(s.criterion);
-    const res = matchGuess(matcher, text, this.cited);
-    if (res.status === 'invalid') return;
+    const res = this.resolve(matcher, text, pick, send);
+    if (!res || res.status === 'invalid') return;
     if (res.status !== 'ok') {
       s.lastEvent = { kind: res.status, player: me.id, name: res.player !== undefined ? playerName(res.player) : undefined };
       return;
@@ -203,10 +215,10 @@ export class Room extends DurableObject<Env> {
   }
 
   // ----- Battle royale: everyone answers at once, the weakest of each round is out -----
-  private royaleGuess(me: RoomPlayer, text: string, send: (m: RoomServerMsg) => void) {
+  private royaleGuess(me: RoomPlayer, text: string, pick: string | undefined, send: (m: RoomServerMsg) => void) {
     const s = this.s!;
-    const res = matchGuess(getMatcher(s.criterion), text, this.cited);
-    if (res.status === 'invalid') return;
+    const res = this.resolve(getMatcher(s.criterion), text, pick, send);
+    if (!res || res.status === 'invalid') return;
     if (res.status !== 'ok') {
       send({ t: 'outcome', outcome: res.status === 'duplicate' ? { status: 'duplicate', name: playerName(res.player) } : { status: 'wrong', name: res.player !== undefined ? playerName(res.player) : undefined } });
       return;

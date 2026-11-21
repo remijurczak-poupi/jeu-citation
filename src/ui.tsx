@@ -1,9 +1,9 @@
 // Shared UI pieces: stadium curtain transition, silhouettes, theme picker, leaderboard, profile form.
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getSession, setSession } from './api';
 import { useI18n } from './i18n';
 import { clubName, COUNTRIES, countryName, flag, leagueName, seasonLabel } from './format';
-import type { WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
+import type { Suggestion, WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
 
 // ---------- Stadium curtain ----------
 /** One half of an illustrated (original, generic) stadium. The two halves meet on the halfway line. */
@@ -403,5 +403,77 @@ export function War({ meta }: { meta: Meta }) {
         </ol>
       )}
     </div>
+  );
+}
+
+// ---------- Answer input with suggestions ----------
+/**
+ * Free text answer box. With `suggestions`, players of the whole base whose name starts with
+ * the typed letters (3 or more) are listed: tap one, or use the arrows then Enter, to answer
+ * with that exact player. Enter alone sends the text (tolerant matching).
+ * `choices` lists homonyms to pick from when the server found the typed name ambiguous.
+ */
+export function GuessInput({ onGuess, suggestions, choices, onClearChoices, placeholder }: {
+  onGuess: (text: string, pick?: string) => void;
+  suggestions: boolean;
+  choices?: Suggestion[] | null;
+  onClearChoices?: () => void;
+  placeholder: string;
+}) {
+  const { t } = useI18n();
+  const [text, setText] = useState('');
+  const [list, setList] = useState<Suggestion[]>([]);
+  const [active, setActive] = useState(-1);
+  const seq = useRef(0);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const q = text.trim();
+    if (!suggestions || q.length < 3) { setList([]); setActive(-1); return; }
+    const n = ++seq.current;
+    const h = setTimeout(() => api.suggest(q).then((r) => { if (n === seq.current) { setList(r); setActive(-1); } }).catch(() => {}), 120);
+    return () => clearTimeout(h);
+  }, [text, suggestions]);
+
+  const shown = choices?.length ? choices : list;
+  const send = (pick?: Suggestion) => {
+    const value = text.trim();
+    if (!pick && !value) return;
+    onGuess(pick ? pick.n : value, pick?.q);
+    setText(''); setList([]); setActive(-1); seq.current++;
+    onClearChoices?.();
+    input.current?.focus();
+  };
+  const key = (e: React.KeyboardEvent) => {
+    if (!shown.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => (a + 1) % shown.length); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => (a <= 0 ? shown.length - 1 : a - 1)); }
+    else if (e.key === 'Escape') { setList([]); onClearChoices?.(); }
+  };
+  return (
+    <form className="guess-form" onSubmit={(e) => { e.preventDefault(); send(active >= 0 ? shown[active] : undefined); }}>
+      <input
+        ref={input}
+        autoFocus
+        value={text}
+        onChange={(e) => { setText(e.target.value); if (choices?.length) onClearChoices?.(); }}
+        onKeyDown={key}
+        placeholder={placeholder}
+        autoComplete="off" autoCorrect="off" autoCapitalize="words" spellCheck={false} enterKeyHint="send" maxLength={80}
+        role="combobox" aria-expanded={shown.length > 0} aria-autocomplete="list"
+      />
+      {shown.length > 0 && (
+        <ul className="suggest" role="listbox">
+          {choices?.length ? <li className="suggest-title">{t.whichOne}</li> : null}
+          {shown.map((o, i) => (
+            <li key={o.q} role="option" aria-selected={i === active} className={i === active ? 'on' : ''}
+              onMouseDown={(e) => { e.preventDefault(); send(o); }}>
+              <span className="suggest-name">{o.n}</span>
+              <small>{[o.c && flag(o.c), o.p && t.f.positions[o.p], o.y].filter(Boolean).join(' · ')}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </form>
   );
 }

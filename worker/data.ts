@@ -1,7 +1,7 @@
 // Football dataset (built from Wikidata by scripts/build-data.mjs) and theme ("criterion") logic.
 import raw from '../src/data/football.json';
 import { boundedDistance, compact, surnameKeys, tolerance } from './normalize';
-import type { Criterion, LeagueId, Position } from '../shared/types';
+import type { Criterion, LeagueId, Position, Suggestion } from '../shared/types';
 
 export interface Club {
   q: string; n: string; nf?: string;
@@ -254,6 +254,7 @@ export function getMatcher(c: Criterion): Matcher {
 }
 
 export type GuessResult =
+  | { status: 'ambiguous'; options: number[] }
   | { status: 'ok'; player: number }
   | { status: 'duplicate'; player: number }
   | { status: 'wrong'; player?: number } // player = recognised but not in theme
@@ -291,18 +292,60 @@ export function matchGuess(m: Matcher, input: string, cited: Set<number>, strict
     () => fuzzy(scope, k, false, strict),
     () => fuzzy(scope, k, true, strict),
   ];
-  for (const stage of stages) {
+  for (const [i, stage] of stages.entries()) {
     const cands = stage();
     if (!cands.length) continue;
     const sorted = [...cands].sort((a, b) => data.players[b].s - data.players[a].s);
-    const fresh = sorted.find((p) => !cited.has(p));
-    if (fresh === undefined) return { status: 'duplicate', player: sorted[0] };
-    return { status: 'ok', player: fresh };
+    const fresh = sorted.filter((p) => !cited.has(p));
+    if (!fresh.length) return { status: 'duplicate', player: sorted[0] };
+    // A bare surname shared by players of similar fame ("Fofana"): ask which one instead of guessing.
+    // The options come from the whole base, so the question reveals nothing about the theme.
+    if (i === 1 && fresh.length > 1 && data.players[fresh[1]].s * 2 >= data.players[fresh[0]].s) {
+      const options = [...(index.sur.get(k) ?? [])].sort((a, b) => data.players[b].s - data.players[a].s).slice(0, 8);
+      return { status: 'ambiguous', options };
+    }
+    return { status: 'ok', player: fresh[0] };
   }
   // Not in the theme: is it a real player we know? (better feedback)
   const known = index.full.get(k);
   if (known?.length) return { status: 'wrong', player: [...known].sort((a, b) => data.players[b].s - data.players[a].s)[0] };
   return { status: 'wrong' };
+}
+
+/** Answer given by picking an exact player (suggestion list or homonym choice). */
+export function matchPick(m: Matcher, p: number, cited: Set<number>): GuessResult {
+  if (!m.scope.players.has(p)) return { status: 'wrong', player: p };
+  if (cited.has(p)) return { status: 'duplicate', player: p };
+  return { status: 'ok', player: p };
+}
+
+let byQ: Map<string, number> | null = null;
+export function playerIndex(q: string): number | undefined {
+  byQ ??= new Map(data.players.map((pl, i) => [pl.q, i]));
+  return byQ.get(q);
+}
+
+// ---------- Suggestions while typing ----------
+let prefixKeys: { k: string; p: number }[] | null = null;
+/** Players of the whole base whose full name or surname starts with the input (3 letters or more), most famous first. */
+export function suggest(input: string, limit = 8): number[] {
+  const k = compact(input);
+  if (k.length < 3 || k.length > 60) return [];
+  if (!prefixKeys) {
+    prefixKeys = [];
+    for (const [key, ps] of index.full) for (const p of ps) prefixKeys.push({ k: key, p });
+    for (const [key, ps] of index.sur) for (const p of ps) prefixKeys.push({ k: key, p });
+    prefixKeys.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+  }
+  let lo = 0, hi = prefixKeys.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (prefixKeys[mid].k < k) lo = mid + 1; else hi = mid; }
+  const found = new Set<number>();
+  for (let i = lo; i < prefixKeys.length && prefixKeys[i].k.startsWith(k) && found.size < 3000; i++) found.add(prefixKeys[i].p);
+  return [...found].sort((a, b) => data.players[b].s - data.players[a].s).slice(0, limit);
+}
+export function suggestion(p: number): Suggestion {
+  const pl = data.players[p];
+  return { q: pl.q, n: pl.n, ...(pl.b ? { y: pl.b } : {}), ...(pl.c?.[0] ? { c: pl.c[0] } : {}), ...(pl.p?.[0] ? { p: pl.p[0] } : {}) };
 }
 
 export const playerName = (p: number) => data.players[p].n;

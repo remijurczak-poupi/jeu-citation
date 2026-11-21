@@ -13,12 +13,12 @@ export const de: DictPatch = {
   friendsTitle: 'Mit Freunden', friendsHint: 'Privater Raum mit Code',
   leaderboards: 'Ranglisten', history: 'Frühere Challenges', historyHint: 'Vergangene Tage nachspielen (ohne Wertung).',
   players: 'Spieler', player: 'Spieler', rank: 'Platz', mode: 'Modus', theme: 'Thema',
-  modes: { timed1: '1 Minute', timed3: '3 Minuten', timed10: '10 Minuten', unlimited: 'Unbegrenzt', hardcore: 'Hardcore', streak: 'Serie', chain: 'Kette', daily: 'Tageschallenge' },
+  modes: { timed1: '1 Minute', timed3: '3 Minuten', timed10: '10 Minuten', timed15: '15 Minuten', timed30: '30 Minuten', unlimited: 'Unbegrenzt', hardcore: 'Hardcore', timed60: '1 Stunde', streak10: 'Serie 10 s', streak: 'Serie 20 s', streak30: 'Serie 30 s', chain: 'Kette', daily: 'Tageschallenge' },
   modeHints: {
     timed1: 'Sprint.', timed3: 'Der Klassiker.', timed10: 'Marathon.',
     unlimited: 'Keine Uhr. Hör auf, wann du willst (Ende nach 10 Min. ohne Antwort).',
     hardcore: 'Ein Fehler oder eine Wiederholung und es ist vorbei. 60 s pro Antwort.',
-    streak: '15 s auf der Uhr, jede richtige Antwort setzt sie zurück.',
+    streak: 'Die Uhr startet bei jeder richtigen Antwort neu.',
     chain: 'Nenne einen Mitspieler des letzten Spielers. 30 s pro Glied.', daily: '',
   },
   league: 'Liga', club: 'Verein', period: 'Saisons', any: 'Alle', allLeagues: 'Die 5 großen Ligen', from: 'Von', to: 'Bis',
@@ -52,7 +52,7 @@ export const de: DictPatch = {
     chainHint: 'Bis zu 10 Spieler, reihum: nenne in 20 s einen Mitspieler des letzten Spielers oder verliere ein Leben.',
     royaleHint: 'Bis zu 20 Spieler, alle gleichzeitig. Wer in einer Runde die wenigsten Spieler nennt, fliegt raus.',
     timeout: (n: string) => `Zeit abgelaufen! ${n} verliert ein Leben`, out: (n: string) => `Raus: ${n}`,
-    restart: 'Niemand mehr übrig: neue Kette!', round: (n: number) => `Runde ${n}`, thisRound: 'diese Runde', total: 'gesamt', teammateOf: 'Nenne einen Mitspieler von',
+    restart: 'Niemand mehr übrig: neue Kette!', round: (n: number) => `Runde ${n}`, thisRound: 'diese Runde', total: 'gesamt', teammateOf: 'Nenne einen Mitspieler von', ballSpeed: 'Zeit des Balls von der Mitte bis zum Tor',
   },
   since: (s: string) => `seit ${s}`,
   f: {
@@ -68,7 +68,7 @@ export const de: DictPatch = {
   settings: 'Einstellungen', language: 'Sprache',
   dataCredit: 'Spielerdaten: Wikidata (CC0) und Wikipedia (CC BY-SA). Die 5 großen Ligen seit 2000-01.',
   shareText: (p) => `⚽ ${p.title}\n${p.theme}\n✅ ${p.count} Spieler genannt${p.rank ? `\n🏆 Platz ${p.rank} von ${p.total}` : ''}\n${p.url}`,
-  chainNow: 'Nenne einen Mitspieler von',
+  chainNow: 'Nenne einen Mitspieler von', groups: { timed: 'Gegen die Uhr', streak: 'Serie', chain: 'Kette' }, groupHints: { timed: 'Nenne so viele wie möglich bis zum Ende.', streak: 'Die Uhr startet bei jeder richtigen Antwort neu.', chain: 'Nenne einen Mitspieler des letzten Spielers. 30 s pro Glied.', unlimited: 'Keine Uhr. Hör auf, wann du willst (Ende nach 10 Min. ohne Antwort).', hardcore: 'Ein Fehler oder eine Wiederholung und es ist vorbei. 60 s pro Antwort.' }, duration: 'Dauer', perAnswer: 'Zeit pro Antwort', whichOne: 'Welcher?',
   war: { title: 'Krieg der Vereine und Länder', hint: 'Deine Ergebnisse in der Tageschallenge zählen für deinen Verein und dein Land.', clubs: 'Vereine', countries: 'Länder', week: 'Diese Woche', all: 'Gesamt', supporters: (n: number) => `${n} Spieler`, empty: 'Noch keine Ergebnisse. Spiel die Tageschallenge!' },
 };
 
@@ -79,12 +79,12 @@ export const es: DictPatch = {
   soloTitle: 'Solo', soloHint: 'Elige un modo y un tema', friendsTitle: 'Con amigos', friendsHint: 'Sala privada con código',
   leaderboards: 'Clasificaciones', history: 'Retos anteriores', historyHint: 'Rejuega días anteriores (sin clasificación).',
   players: 'jugadores', player: 'jugador', rank: 'Puesto', mode: 'Modo', theme: 'Tema',
-  modes: { timed1: '1 minuto', timed3: '3 minutos', timed10: '10 minutos', unlimited: 'Ilimitado', hardcore: 'Hardcore', streak: 'Racha', chain: 'Cadena', daily: 'Reto del día' },
+  modes: { timed1: '1 minuto', timed3: '3 minutos', timed10: '10 minutos', timed15: '15 minutos', timed30: '30 minutos', unlimited: 'Ilimitado', hardcore: 'Hardcore', timed60: '1 hora', streak10: 'Racha 10 s', streak: 'Racha 20 s', streak30: 'Racha 30 s', chain: 'Cadena', daily: 'Reto del día' },
   modeHints: {
     timed1: 'Sprint.', timed3: 'El clásico.', timed10: 'Maratón.',
     unlimited: 'Sin reloj. Para cuando quieras (termina tras 10 min sin respuesta).',
     hardcore: 'Un error o una repetición y se acabó. 60 s por respuesta.',
-    streak: '15 s en el reloj, cada acierto lo reinicia.',
+    streak: 'El reloj se reinicia con cada acierto.',
     chain: 'Nombra a un compañero del último jugador. 30 s por eslabón.', daily: '',
   },
   league: 'Liga', club: 'Club', period: 'Temporadas', any: 'Todos', allLeagues: 'Las 5 grandes ligas', from: 'Desde', to: 'Hasta',
@@ -118,7 +118,7 @@ export const es: DictPatch = {
     chainHint: 'Hasta 10 jugadores, por turnos: nombra a un compañero del último jugador en 20 s o pierdes una vida.',
     royaleHint: 'Hasta 20 jugadores, todos a la vez. En cada ronda, quien nombre menos jugadores queda eliminado.',
     timeout: (n: string) => `¡Tiempo! ${n} pierde una vida`, out: (n: string) => `Eliminado: ${n}`,
-    restart: 'No queda nadie: ¡nueva cadena!', round: (n: number) => `Ronda ${n}`, thisRound: 'esta ronda', total: 'total', teammateOf: 'Nombra a un compañero de',
+    restart: 'No queda nadie: ¡nueva cadena!', round: (n: number) => `Ronda ${n}`, thisRound: 'esta ronda', total: 'total', teammateOf: 'Nombra a un compañero de', ballSpeed: 'Tiempo del balón del centro a la portería',
   },
   since: (s: string) => `desde ${s}`,
   f: {
@@ -134,7 +134,7 @@ export const es: DictPatch = {
   settings: 'Ajustes', language: 'Idioma',
   dataCredit: 'Datos: Wikidata (CC0) y Wikipedia (CC BY-SA). Las 5 grandes ligas desde 2000-01.',
   shareText: (p) => `⚽ ${p.title}\n${p.theme}\n✅ ${p.count} jugadores nombrados${p.rank ? `\n🏆 Puesto ${p.rank} de ${p.total}` : ''}\n${p.url}`,
-  chainNow: 'Nombra a un compañero de',
+  chainNow: 'Nombra a un compañero de', groups: { timed: 'Contrarreloj', streak: 'Racha', chain: 'Cadena', unlimited: 'Ilimitado' }, groupHints: { timed: 'Nombra a todos los que puedas antes del final.', streak: 'El reloj se reinicia con cada acierto.', chain: 'Nombra a un compañero del último jugador. 30 s por eslabón.', unlimited: 'Sin reloj. Para cuando quieras (fin tras 10 min sin respuesta).', hardcore: 'Un error o una repetición y se acabó. 60 s por respuesta.' }, duration: 'Duración', perAnswer: 'Tiempo por respuesta', whichOne: '¿Cuál?',
   war: { title: 'Guerra de clubes y países', hint: 'Tus resultados en el reto del día cuentan para tu club y tu país.', clubs: 'Clubes', countries: 'Países', week: 'Esta semana', all: 'Histórico', supporters: (n: number) => `${n} jugador${n > 1 ? 'es' : ''}`, empty: 'Aún no hay resultados. ¡Juega el reto del día!' },
 };
 
@@ -145,12 +145,12 @@ export const it: DictPatch = {
   soloTitle: 'Solo', soloHint: 'Scegli modalità e tema', friendsTitle: 'Con gli amici', friendsHint: 'Stanza privata con codice',
   leaderboards: 'Classifiche', history: 'Sfide passate', historyHint: 'Rigioca i giorni precedenti (fuori classifica).',
   players: 'giocatori', player: 'giocatore', rank: 'Posizione', mode: 'Modalità', theme: 'Tema',
-  modes: { timed1: '1 minuto', timed3: '3 minuti', timed10: '10 minuti', unlimited: 'Illimitata', hardcore: 'Hardcore', streak: 'Serie', chain: 'Catena', daily: 'Sfida del giorno' },
+  modes: { timed1: '1 minuto', timed3: '3 minuti', timed10: '10 minuti', timed15: '15 minuti', timed30: '30 minuti', unlimited: 'Illimitata', hardcore: 'Hardcore', timed60: '1 ora', streak10: 'Serie 10 s', streak: 'Serie 20 s', streak30: 'Serie 30 s', chain: 'Catena', daily: 'Sfida del giorno' },
   modeHints: {
     timed1: 'Sprint.', timed3: 'Il classico.', timed10: 'Maratona.',
     unlimited: 'Senza cronometro. Fermati quando vuoi (fine dopo 10 min senza risposta).',
     hardcore: 'Un errore o una ripetizione ed è finita. 60 s a risposta.',
-    streak: '15 s sul cronometro, ogni risposta giusta lo azzera.',
+    streak: 'Il cronometro riparte a ogni risposta giusta.',
     chain: 'Nomina un compagno di squadra dell’ultimo giocatore. 30 s per anello.', daily: '',
   },
   league: 'Campionato', club: 'Club', period: 'Stagioni', any: 'Tutti', allLeagues: 'I 5 grandi campionati', from: 'Da', to: 'A',
@@ -184,7 +184,7 @@ export const it: DictPatch = {
     chainHint: 'Fino a 10 giocatori, a turno: nomina un compagno dell’ultimo giocatore entro 20 s o perdi una vita.',
     royaleHint: 'Fino a 20 giocatori, tutti insieme. A ogni round chi nomina meno giocatori è eliminato.',
     timeout: (n: string) => `Tempo scaduto! ${n} perde una vita`, out: (n: string) => `Eliminato: ${n}`,
-    restart: 'Nessuno da nominare: nuova catena!', round: (n: number) => `Round ${n}`, thisRound: 'questo round', total: 'totale', teammateOf: 'Nomina un compagno di',
+    restart: 'Nessuno da nominare: nuova catena!', round: (n: number) => `Round ${n}`, thisRound: 'questo round', total: 'totale', teammateOf: 'Nomina un compagno di', ballSpeed: 'Tempo del pallone dal centro alla porta',
   },
   since: (s: string) => `dal ${s}`,
   f: {
@@ -200,7 +200,7 @@ export const it: DictPatch = {
   settings: 'Impostazioni', language: 'Lingua',
   dataCredit: 'Dati: Wikidata (CC0) e Wikipedia (CC BY-SA). I 5 grandi campionati dal 2000-01.',
   shareText: (p) => `⚽ ${p.title}\n${p.theme}\n✅ ${p.count} giocatori nominati${p.rank ? `\n🏆 ${p.rank}° su ${p.total}` : ''}\n${p.url}`,
-  chainNow: 'Nomina un compagno di',
+  chainNow: 'Nomina un compagno di', groups: { timed: 'Contro il tempo', streak: 'Serie', chain: 'Catena', unlimited: 'Illimitata' }, groupHints: { timed: 'Nomina più giocatori possibile prima della fine.', streak: 'Il cronometro riparte a ogni risposta giusta.', chain: 'Nomina un compagno dell’ultimo giocatore. 30 s per anello.', unlimited: 'Niente cronometro. Fermati quando vuoi (fine dopo 10 min senza risposta).', hardcore: 'Un errore o una ripetizione ed è finita. 60 s per risposta.' }, duration: 'Durata', perAnswer: 'Tempo per risposta', whichOne: 'Quale?',
   war: { title: 'Guerra di club e nazioni', hint: 'I tuoi risultati nella sfida del giorno contano per il tuo club e la tua nazione.', clubs: 'Club', countries: 'Nazioni', week: 'Questa settimana', all: 'Sempre', supporters: (n: number) => `${n} giocator${n > 1 ? 'i' : 'e'}`, empty: 'Ancora nessun risultato. Gioca la sfida del giorno!' },
 };
 
@@ -211,12 +211,12 @@ export const pt: DictPatch = {
   soloTitle: 'Solo', soloHint: 'Escolhe um modo e um tema', friendsTitle: 'Com amigos', friendsHint: 'Sala privada com código',
   leaderboards: 'Classificações', history: 'Desafios anteriores', historyHint: 'Volta a jogar dias anteriores (sem classificação).',
   players: 'jogadores', player: 'jogador', rank: 'Posição', mode: 'Modo', theme: 'Tema',
-  modes: { timed1: '1 minuto', timed3: '3 minutos', timed10: '10 minutos', unlimited: 'Ilimitado', hardcore: 'Hardcore', streak: 'Sequência', chain: 'Corrente', daily: 'Desafio do dia' },
+  modes: { timed1: '1 minuto', timed3: '3 minutos', timed10: '10 minutos', timed15: '15 minutos', timed30: '30 minutos', unlimited: 'Ilimitado', hardcore: 'Hardcore', timed60: '1 hora', streak10: 'Sequência 10 s', streak: 'Sequência 20 s', streak30: 'Sequência 30 s', chain: 'Corrente', daily: 'Desafio do dia' },
   modeHints: {
     timed1: 'Sprint.', timed3: 'O clássico.', timed10: 'Maratona.',
     unlimited: 'Sem relógio. Para quando quiseres (acaba após 10 min sem resposta).',
     hardcore: 'Um erro ou repetição e acabou. 60 s por resposta.',
-    streak: '15 s no relógio, cada acerto reinicia-o.',
+    streak: 'O relógio recomeça a cada acerto.',
     chain: 'Nomeia um colega de equipa do último jogador. 30 s por elo.', daily: '',
   },
   league: 'Liga', club: 'Clube', period: 'Temporadas', any: 'Todos', allLeagues: 'As 5 grandes ligas', from: 'De', to: 'Até',
@@ -250,7 +250,7 @@ export const pt: DictPatch = {
     chainHint: 'Até 10 jogadores, à vez: nomeia um colega do último jogador em 20 s ou perdes uma vida.',
     royaleHint: 'Até 20 jogadores, todos ao mesmo tempo. Em cada ronda, quem nomear menos jogadores é eliminado.',
     timeout: (n: string) => `Tempo esgotado! ${n} perde uma vida`, out: (n: string) => `Eliminado: ${n}`,
-    restart: 'Ninguém para nomear: nova corrente!', round: (n: number) => `Ronda ${n}`, thisRound: 'esta ronda', total: 'total', teammateOf: 'Nomeia um colega de',
+    restart: 'Ninguém para nomear: nova corrente!', round: (n: number) => `Ronda ${n}`, thisRound: 'esta ronda', total: 'total', teammateOf: 'Nomeia um colega de', ballSpeed: 'Tempo da bola do centro até à baliza',
   },
   since: (s: string) => `desde ${s}`,
   f: {
@@ -266,6 +266,6 @@ export const pt: DictPatch = {
   settings: 'Definições', language: 'Idioma',
   dataCredit: 'Dados: Wikidata (CC0) e Wikipedia (CC BY-SA). As 5 grandes ligas desde 2000-01.',
   shareText: (p) => `⚽ ${p.title}\n${p.theme}\n✅ ${p.count} jogadores nomeados${p.rank ? `\n🏆 ${p.rank}.º de ${p.total}` : ''}\n${p.url}`,
-  chainNow: 'Nomeia um colega de',
+  chainNow: 'Nomeia um colega de', groups: { timed: 'Contra o relógio', streak: 'Sequência', chain: 'Corrente', unlimited: 'Ilimitado' }, groupHints: { timed: 'Nomeia o máximo possível antes do fim.', streak: 'O relógio recomeça a cada acerto.', chain: 'Nomeia um colega do último jogador. 30 s por elo.', unlimited: 'Sem relógio. Para quando quiseres (fim após 10 min sem resposta).', hardcore: 'Um erro ou uma repetição e acabou. 60 s por resposta.' }, duration: 'Duração', perAnswer: 'Tempo por resposta', whichOne: 'Qual?',
   war: { title: 'Guerra de clubes e países', hint: 'Os teus resultados no desafio do dia contam para o teu clube e o teu país.', clubs: 'Clubes', countries: 'Países', week: 'Esta semana', all: 'Sempre', supporters: (n: number) => `${n} jogador${n > 1 ? 'es' : ''}`, empty: 'Ainda sem resultados. Joga o desafio do dia!' },
 };

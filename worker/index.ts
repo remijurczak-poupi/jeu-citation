@@ -1,13 +1,13 @@
 // API Worker: profiles, solo games, daily challenge, leaderboards and private rooms.
 import { Hono, type Context } from 'hono';
-import { data, normalizeCriterion, scopeSize, criterionKey } from './data';
+import { data, normalizeCriterion, scopeSize, criterionKey, suggest, suggestion } from './data';
 import { dailyCriterion, dailyNumber, todayKey } from './daily';
 import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
 import type { WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
-import { MODE_RULES } from '../shared/types';
+import { MODE_RULES, SOLO_MODES as SOLO_LIST } from '../shared/types';
 
 export { Room } from './room';
 
@@ -148,7 +148,7 @@ app.post('/api/profile/recover', async (c) => {
 });
 
 // ---------- solo games ----------
-const SOLO_MODES: SoloMode[] = ['timed1', 'timed3', 'timed10', 'unlimited', 'hardcore', 'streak', 'chain', 'daily'];
+const SOLO_MODES: SoloMode[] = [...SOLO_LIST, 'daily'];
 
 async function loadGame(c: C, id: string, me: Me): Promise<GameRow> {
   const g = await c.env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(id).first<GameRow>();
@@ -242,13 +242,14 @@ app.get('/api/games/:id', async (c) => {
 
 app.post('/api/games/:id/guess', async (c) => {
   const me = requireMe(c);
-  const { text } = (await c.req.json().catch(() => ({}))) as { text?: string };
+  const { text, pick } = (await c.req.json().catch(() => ({}))) as { text?: string; pick?: unknown };
   if (typeof text !== 'string') throw new HttpError(400, 'bad_text');
+  if (pick !== undefined && (typeof pick !== 'string' || !/^Q\d{1,12}$/.test(pick))) throw new HttpError(400, 'bad_pick');
   const g = await loadGame(c, c.req.param('id'), me);
   const now = Date.now();
   const prev = g.version;
   const wasActive = g.status === 'active';
-  const { outcome, changed } = applyGuess(g, text.slice(0, 80), now);
+  const { outcome, changed } = applyGuess(g, text.slice(0, 80), now, pick as string | undefined);
   if (changed) await saveGame(c, g, prev, wasActive);
   return c.json({ outcome, state: toState(g, now, await rankOf(c, g)) });
 });
@@ -348,6 +349,14 @@ app.get('/api/leaderboard', async (c) => {
     rows: top.map(toRow),
     me: myIdx >= 0 ? toRow(rows[myIdx], myIdx) : null,
   });
+});
+
+// ---------- suggestions while typing ----------
+// From the whole base (not the theme), so they never give the answer away.
+app.get('/api/suggest', (c) => {
+  const q = c.req.query('q') ?? '';
+  c.header('Cache-Control', 'public, max-age=3600');
+  return c.json(suggest(q.slice(0, 60)).map(suggestion));
 });
 
 // ---------- clubs & countries war ----------

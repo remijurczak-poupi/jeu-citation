@@ -1,5 +1,5 @@
 // Solo games: the server holds the state, validates each answer and computes the score.
-import { criterionKey, data, getMatcher, matchGuess, normalizeCriterion, playerName } from './data';
+import { criterionKey, data, getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, suggestion } from './data';
 import { chainMatcher, clubLabel, seasonLabel, teammates } from './chain';
 
 let qidIndex: Map<string, number> | null = null;
@@ -57,7 +57,7 @@ export function expire(g: GameRow, now: number): boolean {
   return true;
 }
 
-export function applyGuess(g: GameRow, text: string, now: number): { outcome: GuessOutcome; changed: boolean } {
+export function applyGuess(g: GameRow, text: string, now: number, pick?: string): { outcome: GuessOutcome; changed: boolean } {
   if (expire(g, now)) return { outcome: { status: 'invalid' }, changed: true };
   if (g.status !== 'active') return { outcome: { status: 'invalid' }, changed: false };
   if ((g.guesses > 0 && now - g.last_at < MIN_GUESS_INTERVAL_MS) || g.guesses >= MAX_GUESSES) return { outcome: { status: 'invalid' }, changed: false };
@@ -67,8 +67,11 @@ export function applyGuess(g: GameRow, text: string, now: number): { outcome: Gu
   const criterion = JSON.parse(g.criterion) as Criterion;
   const last = g.mode === 'chain' ? playerByQ(found[found.length - 1]) : undefined;
   const matcher = last !== undefined ? chainMatcher(last, criterion) : getMatcher(criterion);
-  const res = matchGuess(matcher, text, cited, !!rules.suddenDeath);
+  const picked = pick !== undefined ? playerIndex(pick) : undefined;
+  if (pick !== undefined && picked === undefined) return { outcome: { status: 'invalid' }, changed: false };
+  const res = picked !== undefined ? matchPick(matcher, picked, cited) : matchGuess(matcher, text, cited, !!rules.suddenDeath);
   if (res.status === 'invalid') return { outcome: res, changed: false };
+  if (res.status === 'ambiguous') return { outcome: { status: 'ambiguous', options: res.options.map(suggestion) }, changed: false };
   g.guesses++;
   g.last_at = now;
   let outcome: GuessOutcome;
