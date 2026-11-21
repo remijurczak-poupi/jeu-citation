@@ -103,7 +103,10 @@ The free plan allows 100,000 requests a day and 10 ms of CPU per request. Name m
 
 ## Reports of refused answers
 
-Players can report an answer that should have counted. Review them with:
+Players can report an answer that should have counted. Review them on the admin page
+`/#/admin` (password: the `ADMIN_KEY` repository secret, pushed to the Worker on deploy).
+Accepting a report makes that player count for that exact theme right away (table
+`accepted_answers`); fix the data itself when the gap is wider. Or with the command line:
 
 ```
 npx wrangler d1 execute DB --remote --command "SELECT id, text, recognised, criterion, created_at FROM reports WHERE status = 'open' ORDER BY created_at DESC"

@@ -381,3 +381,14 @@ button.report.inline { border: 1px solid var(--line); text-decoration: none; bor
   .suggest { max-height: 45vh; overflow-y: auto; }
   .game:focus-within ~ .tabbar, body:has(.game input:focus) .tabbar { display: none; }
 }
+
+/* ---------- admin ---------- */
+.admin form { display: flex; gap: 8px; }
+.reports { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.report-item { background: var(--card2); border-radius: 12px; padding: 12px; }
+.report-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.report-head small { color: var(--muted); }
+.report-item .hint { margin: 6px 0; }
+.report-item .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.report-player small { color: var(--muted); display: block; }
+.suggest.static { position: static; margin-top: 4px; }

@@ -1,5 +1,5 @@
 // Solo games: the server holds the state, validates each answer and computes the score.
-import { criterionKey, data, getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, rankedThemeId, describeList } from './data';
+import { type Matcher, criterionKey, data, getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, rankedThemeId, describeList } from './data';
 import { chainMatcher, clubLabel, seasonLabel, teammates } from './chain';
 import { dailyNumber } from './daily';
 
@@ -59,7 +59,22 @@ export function expire(g: GameRow, now: number): boolean {
   return true;
 }
 
-export function applyGuess(g: GameRow, text: string, now: number, pick?: string): { outcome: GuessOutcome; changed: boolean } {
+/** Theme matcher plus the answers accepted by hand for it (see accepted_answers). */
+const extraCache = new Map<string, Matcher>();
+function withAccepted(m: Matcher, accepted: number[]): Matcher {
+  const extra = accepted.filter((p) => !m.scope.players.has(p));
+  if (!extra.length) return m;
+  const key = `${m.key}+${extra.sort((a, b) => a - b).join(',')}`;
+  let out = extraCache.get(key);
+  if (!out) {
+    out = { key, scope: { players: new Set([...m.scope.players, ...extra]) } };
+    extraCache.set(key, out);
+    if (extraCache.size > 30) extraCache.delete(extraCache.keys().next().value!);
+  }
+  return out;
+}
+
+export function applyGuess(g: GameRow, text: string, now: number, pick?: string, accepted: number[] = []): { outcome: GuessOutcome; changed: boolean } {
   if (expire(g, now)) return { outcome: { status: 'invalid' }, changed: true };
   if (g.status !== 'active') return { outcome: { status: 'invalid' }, changed: false };
   if ((g.guesses > 0 && now - g.last_at < MIN_GUESS_INTERVAL_MS) || g.guesses >= MAX_GUESSES) return { outcome: { status: 'invalid' }, changed: false };
@@ -68,7 +83,7 @@ export function applyGuess(g: GameRow, text: string, now: number, pick?: string)
   const cited = new Set(found.map(playerByQ).filter((p): p is number => p !== undefined));
   const criterion = JSON.parse(g.criterion) as Criterion;
   const last = g.mode === 'chain' ? playerByQ(found[found.length - 1]) : undefined;
-  const matcher = last !== undefined ? chainMatcher(last, criterion) : getMatcher(criterion);
+  const matcher = last !== undefined ? chainMatcher(last, criterion) : withAccepted(getMatcher(criterion), accepted);
   const picked = pick !== undefined ? playerIndex(pick) : undefined;
   if (pick !== undefined && picked === undefined) return { outcome: { status: 'invalid' }, changed: false };
   const res = picked !== undefined ? matchPick(matcher, picked, cited) : matchGuess(matcher, text, cited, !!rules.suddenDeath);

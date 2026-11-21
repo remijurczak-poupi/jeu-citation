@@ -1,7 +1,7 @@
 // API Worker: profiles, solo games, daily challenge, leaderboards and private rooms.
 import fanClubs from '../src/data/fan-clubs.json';
 import { Hono, type Context } from 'hono';
-import { data, getMatcher, normalizeCriterion, playerIndex, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
+import { data, getMatcher, normalizeCriterion, playerIndex, playerStints, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
 import { dailyCriterion, dailyNumber, dailyStreak, todayKey } from './daily';
 import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
@@ -16,6 +16,7 @@ interface Env {
   DB: D1Database;
   GOOGLE_CLIENT_ID?: string; // OAuth web client id: enables Sign in with Google
   RESEND_API_KEY?: string; // enables e-mail sign-in links (sent with Resend)
+  ADMIN_KEY?: string; // password of the admin page (reports review)
   MAIL_FROM?: string; // sender of those e-mails, e.g. Name the Players <login@example.com>
   ROOMS: DurableObjectNamespace;
   ASSETS: Fetcher;
@@ -356,7 +357,9 @@ app.post('/api/games/:id/guess', async (c) => {
   const now = Date.now();
   const prev = g.version;
   const wasActive = g.status === 'active';
-  const { outcome, changed } = applyGuess(g, text.slice(0, 80), now, pick as string | undefined);
+  const accepted = await c.env.DB.prepare('SELECT player FROM accepted_answers WHERE theme_key = ?').bind(criterionKey(JSON.parse(g.criterion))).all<{ player: string }>();
+  const extra = accepted.results.map((r) => playerIndex(r.player)).filter((p): p is number => p !== undefined);
+  const { outcome, changed } = applyGuess(g, text.slice(0, 80), now, pick as string | undefined, extra);
   if (changed) await saveGame(c, g, prev, wasActive);
   return c.json({ outcome, state: toState(g, now, await rankOf(c, g)) });
 });
@@ -463,6 +466,61 @@ app.post('/api/reports', async (c) => {
   await c.env.DB.prepare('INSERT INTO reports (device_id, game_id, text, recognised, criterion, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(me?.id ?? null, typeof b.gameId === 'string' ? b.gameId.slice(0, 40) : null, b.text.trim(), typeof b.recognised === 'string' ? b.recognised.slice(0, 120) : null,
       JSON.stringify(criterion), typeof b.note === 'string' ? b.note.slice(0, 300) : null, Date.now()).run();
+  return c.json({ ok: true });
+});
+
+// ---------- admin: review reports ----------
+function requireAdmin(c: C) {
+  const key = c.req.header('x-admin-key');
+  if (!c.env.ADMIN_KEY) throw new HttpError(404, 'admin_not_configured');
+  if (!key || key !== c.env.ADMIN_KEY) throw new HttpError(401, 'bad_admin_key');
+}
+/** Clubs and seasons of a player, to judge a report. */
+const careerText = (p: number) => playerStints(p).map(([, cl, s, e]) => `${data.clubs[cl].n} ${s >= 0 ? s : '?'}–${e >= 0 ? e : data.players[p].x ? 'now' : '?'}`).join(' · ');
+
+app.get('/api/admin/reports', async (c) => {
+  requireAdmin(c);
+  const status = c.req.query('status') === 'closed' ? 'closed' : 'open';
+  const rows = await c.env.DB.prepare(
+    `SELECT r.id, r.text, r.recognised, r.criterion, r.note, r.created_at, r.status, r.game_id, p.pseudo
+     FROM reports r LEFT JOIN profiles p ON p.id = r.device_id
+     WHERE ${status === 'open' ? "r.status = 'open'" : "r.status <> 'open'"} ORDER BY r.created_at DESC LIMIT 200`,
+  ).all<{ id: number; text: string; recognised: string | null; criterion: string; note: string | null; created_at: number; status: string; game_id: string | null; pseudo: string | null }>();
+  return c.json(rows.results.map((r) => {
+    const criterion = JSON.parse(r.criterion) as Criterion;
+    const p = r.recognised ? suggest(r.recognised, 1)[0] : undefined;
+    const exact = p !== undefined && data.players[p].n === r.recognised ? p : undefined;
+    return {
+      ...r, criterion,
+      player: exact !== undefined ? { q: data.players[exact].q, n: data.players[exact].n, career: careerText(exact), inTheme: getMatcher(criterion).scope.players.has(exact) } : null,
+    };
+  }));
+});
+
+app.get('/api/admin/player', (c) => {
+  requireAdmin(c);
+  const p = playerIndex(c.req.query('q') ?? '');
+  if (p === undefined) throw new HttpError(404, 'player_not_found');
+  return c.json({ q: data.players[p].q, n: data.players[p].n, career: careerText(p) });
+});
+
+app.post('/api/admin/reports/:id', async (c) => {
+  requireAdmin(c);
+  const id = Number(c.req.param('id'));
+  const { action, player } = (await c.req.json().catch(() => ({}))) as { action?: string; player?: string };
+  const r = await c.env.DB.prepare('SELECT criterion FROM reports WHERE id = ?').bind(id).first<{ criterion: string }>();
+  if (!r) throw new HttpError(404, 'report_not_found');
+  if (action === 'accept') {
+    if (typeof player !== 'string' || playerIndex(player) === undefined) throw new HttpError(400, 'bad_player');
+    await c.env.DB.batch([
+      c.env.DB.prepare('INSERT OR IGNORE INTO accepted_answers (theme_key, player, report_id, created_at) VALUES (?, ?, ?, ?)').bind(criterionKey(JSON.parse(r.criterion)), player, id, Date.now()),
+      c.env.DB.prepare("UPDATE reports SET status = 'accepted' WHERE id = ?").bind(id),
+    ]);
+  } else if (action === 'reject') {
+    await c.env.DB.prepare("UPDATE reports SET status = 'rejected' WHERE id = ?").bind(id).run();
+  } else if (action === 'reopen') {
+    await c.env.DB.prepare("UPDATE reports SET status = 'open' WHERE id = ?").bind(id).run();
+  } else throw new HttpError(400, 'bad_action');
   return c.json({ ok: true });
 });
 
