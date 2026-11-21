@@ -1,4 +1,5 @@
 // API Worker: profiles, solo games, daily challenge, leaderboards and private rooms.
+import fanClubs from '../src/data/fan-clubs.json';
 import { Hono, type Context } from 'hono';
 import { data, normalizeCriterion, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
 import { dailyCriterion, dailyNumber, todayKey } from './daily';
@@ -51,7 +52,8 @@ function checkPseudo(raw: unknown): string | null {
   return p;
 }
 const pseudoNorm = (p: string) => p.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
-const validClub = (c: unknown) => typeof c === 'string' && (c === 'other' || data.clubs.some((x) => x.q === c));
+const FAN_CLUBS = new Set<string>([...(fanClubs as { q: string }[]).map((c) => c.q), ...data.clubs.map((c) => c.q)]);
+const validClub = (c: unknown) => typeof c === 'string' && (c === 'other' || FAN_CLUBS.has(c));
 const validCountry = (c: unknown) => typeof c === 'string' && /^([A-Z]{2}|GB-(ENG|SCT|WLS|NIR))$/.test(c);
 
 async function auth(env: Env, id?: string | null, secret?: string | null): Promise<Me | null> {
@@ -499,7 +501,14 @@ app.get('/api/suggest', (c) => {
 app.get('/api/war', async (c) => {
   const me = c.get('me');
   const by = c.req.query('by') === 'country' ? 'country' : 'club';
-  const period = c.req.query('period') === 'all' ? 'all' : 'week';
+  const metric = c.req.query('metric') === 'supporters' ? 'supporters' : 'points';
+  const rows = metric === 'supporters' ? await supporterRows(c, by, c.req.query('period') === 'month' ? 'month' : 'week') : await pointRows(c, by, c.req.query('period') === 'all' ? 'all' : 'week');
+  const mine = me ? rows.find((r) => r.key === me[by]) ?? null : null;
+  return c.json({ by, metric, period: c.req.query('period') ?? 'week', rows: rows.slice(0, 50), me: mine, total: rows.length });
+});
+
+/** Daily challenge points per club or country (each supporter's daily scores). */
+async function pointRows(c: C, by: 'club' | 'country', period: 'week' | 'all'): Promise<WarRow[]> {
   const today = todayKey();
   const weekday = (new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7; // 0 = Monday
   const from = period === 'week' ? todayKey(Date.parse(today + 'T12:00:00Z') - weekday * 86400_000) : '0000-00-00';
@@ -509,9 +518,28 @@ app.get('/api/war', async (c) => {
      WHERE s.board_key >= ? AND s.board_key < 'daily;' AND p.${by} <> 'other'
      GROUP BY p.${by} ORDER BY points DESC`,
   ).bind('daily:' + from).all<{ k: string; points: number; players: number }>();
-  const rows: WarRow[] = res.results.map((r, i) => ({ rank: i + 1, key: r.k, points: r.points, players: r.players }));
-  const mine = me ? rows.find((r) => r.key === me[by]) ?? null : null;
-  return c.json({ by, period, from, rows: rows.slice(0, 50), me: mine, total: rows.length });
+  return res.results.map((r, i) => ({ rank: i + 1, key: r.k, points: r.points, players: r.players }));
+}
+
+/** Active supporters per club or country: profiles that played at least one game in the period (clicks alone don't count). */
+async function supporterRows(c: C, by: 'club' | 'country', period: 'week' | 'month'): Promise<WarRow[]> {
+  const res = await c.env.DB.prepare(
+    `SELECT p.${by} AS k, COUNT(*) AS players FROM profiles p
+     WHERE p.${by} <> 'other' AND EXISTS (SELECT 1 FROM games g WHERE g.device_id = p.id AND g.started_at >= ?)
+     GROUP BY p.${by} ORDER BY players DESC`,
+  ).bind(periodStart(period)).all<{ k: string; players: number }>();
+  let rank = 0, prev = -1;
+  return res.results.map((r, i) => { if (r.players !== prev) { rank = i + 1; prev = r.players; } return { rank, key: r.k, points: r.players, players: r.players }; });
+}
+
+/** A club's standing, for the "come and support your club" page. */
+app.get('/api/clubs/:q', async (c) => {
+  const q = c.req.param('q');
+  if (!FAN_CLUBS.has(q)) throw new HttpError(404, 'club_not_found');
+  const rows = await supporterRows(c, 'club', 'week');
+  const row = rows.find((r) => r.key === q);
+  const all = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM profiles WHERE club = ?').bind(q).first<{ n: number }>();
+  return c.json({ q, rank: row?.rank ?? null, active: row?.players ?? 0, supporters: all?.n ?? 0, clubs: rows.length });
 });
 
 // ---------- rooms ----------

@@ -1,3 +1,4 @@
+import { fanClub, fanClubName } from './clubs';
 import type { Criterion, Meta } from '../shared/types';
 import type { Lang, T } from './i18n';
 
@@ -5,6 +6,8 @@ export const seasonLabel = (y: number) => `${y}-${String((y + 1) % 100).padStart
 
 export function clubName(meta: Meta | null, q: string, lang: Lang, t?: T): string {
   if (q === 'other') return t?.otherClub ?? '—';
+  const fan = fanClub(q);
+  if (fan) return fanClubName(fan, lang);
   const c = meta?.clubs.find((x) => x.q === q);
   if (!c) return q;
   return (lang === 'fr' && c.nf) || c.n;

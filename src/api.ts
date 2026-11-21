@@ -1,5 +1,5 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
+import type { ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
 
 export interface Session extends Profile { id: string; secret: string }
 
@@ -43,7 +43,8 @@ export const api = {
   finish: (id: string) => call<GameState>('POST', `/games/${id}/finish`),
   daily: () => call<DailyInfo>('GET', '/daily'),
   dailyHistory: () => call<DailyHistoryItem[]>('GET', '/daily/history'),
-  war: (by: 'club' | 'country', period: 'week' | 'all') => call<WarBoard>('GET', `/war?by=${by}&period=${period}`),
+  war: (by: 'club' | 'country', metric: WarMetric, period: string) => call<WarBoard>('GET', `/war?by=${by}&metric=${metric}&period=${period}`),
+  club: (q: string) => call<ClubStanding>('GET', `/clubs/${q}`),
   leaderboard: (p: { mode: SoloMode; kind?: BoardKind; theme?: string; period?: BoardPeriod; ranking?: Ranking; date?: string }) => {
     const q = new URLSearchParams({ mode: p.mode, kind: p.kind ?? 'best', ranking: p.ranking ?? 'count' });
     if (p.period) q.set('period', p.period);

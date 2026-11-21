@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, getSession } from './api';
+import { leaveGuarded } from './guard';
+import { loadFanClubs } from './clubs';
 import { dictionaries, I18n, initialLang, LANGS, useI18n, type Lang } from './i18n';
 import { themeLabel } from './format';
-import { Badges, Leaderboard, LoginLink, ProfileForm, RankedThemePicker, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
+import { Badges, ClubPage, Leaderboard, LoginLink, ProfileForm, RankedThemePicker, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
 import { GameScreen } from './screens/Game';
 import { RoomScreen, RoomHome } from './screens/Room';
 import type { BoardKind, Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
@@ -32,8 +34,9 @@ export default function App() {
   const [curtain, setCurtain] = useState<CurtainState>('closed');
   const [meta, setMeta] = useState<Meta | null>(null);
   const [hasProfile, setHasProfile] = useState(!!getSession());
+  const [, setFanReady] = useState(false); // re-render with club names once the clubs list is in
 
-  useEffect(() => { api.meta().then(setMeta).catch(() => {}); }, []);
+  useEffect(() => { api.meta().then(setMeta).catch(() => {}); loadFanClubs().then(() => setFanReady(true)).catch(() => {}); }, []);
   // Opening animation on first load.
   useEffect(() => { if (meta) { const h = setTimeout(() => setCurtain('opening'), 250); return () => clearTimeout(h); } }, [!!meta]);
   useEffect(() => { if (curtain === 'opening') { const h = setTimeout(() => setCurtain('open'), 700); return () => clearTimeout(h); } }, [curtain]);
@@ -48,14 +51,31 @@ export default function App() {
     return () => clearTimeout(h);
   }, [route]);
 
+  const [leaving, setLeaving] = useState<string | null>(null);
+  const guardClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    const to = e.currentTarget.getAttribute('href')!.slice(1);
+    if (leaveGuarded() && to !== route) { e.preventDefault(); setLeaving(to); }
+  };
+  const t0 = i18n.t;
+  const sections = [
+    { id: 'daily', icon: '📅', label: t0.nav.daily },
+    { id: 'solo', icon: '⏱️', label: t0.nav.solo },
+    { id: 'room', icon: '👥', label: t0.nav.multi },
+    { id: 'leaderboards', icon: '🏆', label: t0.nav.boards },
+  ];
+  const head = route.split('/').filter(Boolean)[0] ?? '';
+  const section = head === 'game' ? '' : head === 'club' ? 'leaderboards' : head;
   const nav: Nav = { go: useCallback((p: string) => { location.hash = p; }, []) };
   const parts = shown.split('/').filter(Boolean);
 
   let screen;
   if (!meta) screen = null;
+  else if (parts[0] === 'club' && parts[1]) screen = <div className="page narrow"><ClubPage meta={meta} q={parts[1]} onSupport={() => (getSession() ? nav.go('/leaderboards') : nav.go('/profile/' + parts[1]))} /></div>;
+  else if (parts[0] === 'profile' && parts[1] && !hasProfile) screen = <div className="page narrow"><ProfileForm meta={meta} presetClub={parts[1]} onDone={() => { setHasProfile(true); nav.go('/leaderboards'); }} /></div>;
   else if (parts[0] === 'login' && parts[1]) screen = <div className="page narrow"><LoginLink token={parts[1]} onDone={() => { setHasProfile(!!getSession()); nav.go('/'); }} /></div>;
   else if (!hasProfile) screen = <div className="page narrow"><ProfileForm meta={meta} onDone={() => setHasProfile(true)} /></div>;
   else if (parts[0] === 'game' && parts[1]) screen = <GameScreen id={parts[1]} meta={meta} nav={nav} />;
+  else if (parts[0] === 'daily') screen = <Home meta={meta} nav={nav} dailyOnly />;
   else if (parts[0] === 'solo') screen = <SoloSetup meta={meta} nav={nav} />;
   else if (parts[0] === 'room' && parts[1]) screen = <RoomScreen code={parts[1].toUpperCase()} meta={meta} nav={nav} />;
   else if (parts[0] === 'room') screen = <RoomHome meta={meta} nav={nav} />;
@@ -66,15 +86,28 @@ export default function App() {
   return (
     <I18n.Provider value={i18n}>
       <header className="topbar">
-        <a href="#/" className="logo"><span className="ball">⚽</span> {i18n.t.appName}</a>
-        <nav>
-          <a href="#/leaderboards" title={i18n.t.leaderboards}>🏆</a>
-          {hasProfile && <a href="#/profile" title={i18n.t.profileTitle}>👤</a>}
+        <a href="#/" className="logo" onClick={guardClick}><span className="ball">⚽</span> <span className="logo-text">{i18n.t.appName}</span></a>
+        <nav className="mainnav">{sections.map((x) => <a key={x.id} href={'#/' + x.id} className={section === x.id ? 'on' : ''} onClick={guardClick}>{x.label}</a>)}</nav>
+        <nav className="side">
+          {hasProfile && <a href="#/profile" title={i18n.t.profileTitle} onClick={guardClick}>👤</a>}
           <select className="lang" value={lang} onChange={(e) => setLang(e.target.value as Lang)} aria-label={i18n.t.language}>
             {LANGS.map((l) => <option key={l.id} value={l.id}>{l.id.toUpperCase()}</option>)}
           </select>
         </nav>
       </header>
+      <nav className="tabbar">{sections.map((x) => <a key={x.id} href={'#/' + x.id} className={section === x.id ? 'on' : ''} onClick={guardClick}><span>{x.icon}</span>{x.label}</a>)}</nav>
+      {leaving && (
+        <div className="modal-back" onClick={() => setLeaving(null)}>
+          <div className="card modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h2>{i18n.t.leaveTitle}</h2>
+            <p className="hint">{i18n.t.leaveText}</p>
+            <div className="row">
+              <button className="primary" onClick={() => setLeaving(null)}>{i18n.t.stay}</button>
+              <button className="link danger" onClick={() => { const to = leaving; setLeaving(null); location.hash = to; }}>{i18n.t.leaveConfirm}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <main>{screen}</main>
       <footer className="footer">{i18n.t.dataCredit}</footer>
       <StadiumCurtain state={curtain} title={curtain === 'closed' || curtain === 'closing' ? i18n.t.appName : undefined} />
@@ -83,7 +116,7 @@ export default function App() {
 }
 
 // ---------- Home ----------
-function Home({ meta, nav }: { meta: Meta; nav: Nav }) {
+function Home({ meta, nav, dailyOnly }: { meta: Meta; nav: Nav; dailyOnly?: boolean }) {
   const { t, lang } = useI18n();
   const [daily, setDaily] = useState<DailyInfo | null>(null);
   const [history, setHistory] = useState<DailyHistoryItem[]>([]);
@@ -98,10 +131,10 @@ function Home({ meta, nav }: { meta: Meta; nav: Nav }) {
   };
   return (
     <div className="page">
-      <section className="hero">
+      {!dailyOnly && <section className="hero">
         <h1>{t.tagline}</h1>
         <p className="hint">{meta.playerCount.toLocaleString(lang)} {t.players} · Premier League · Ligue 1 · La Liga · Serie A · Bundesliga</p>
-      </section>
+      </section>}
 
       {daily && (
         <section className="card daily">
@@ -124,7 +157,7 @@ function Home({ meta, nav }: { meta: Meta; nav: Nav }) {
         </section>
       )}
 
-      <div className="grid2">
+      {!dailyOnly && <div className="grid2">
         <a className="card tile" href="#/solo">
           <span className="tile-icon">⏱️</span>
           <h2>{t.soloTitle}</h2>
@@ -135,7 +168,7 @@ function Home({ meta, nav }: { meta: Meta; nav: Nav }) {
           <h2>{t.friendsTitle}</h2>
           <p className="hint">{t.friendsHint}</p>
         </a>
-      </div>
+      </div>}
 
       {history.length > 0 && (
         <section className="card">

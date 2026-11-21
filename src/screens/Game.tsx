@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useLeaveGuard } from '../guard';
 import { api } from '../api';
 import { useI18n } from '../i18n';
 import { fmtClock, themeLabel } from '../format';
@@ -54,6 +55,7 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
 
   const stop = () => api.finish(id).then(accept);
 
+  useLeaveGuard(g?.status === 'active');
   if (error) return <div className="page narrow"><p className="error">{error}</p></div>;
   if (!g) return <div className="page narrow"><p className="hint">…</p></div>;
 

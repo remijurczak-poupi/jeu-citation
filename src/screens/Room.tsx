@@ -1,3 +1,4 @@
+import { useLeaveGuard } from '../guard';
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import { useI18n } from '../i18n';
@@ -63,6 +64,7 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
   const [choices, setChoices] = useState<Suggestion[] | null>(null);
   const ws = useRef<WebSocket | null>(null);
   useEffect(() => { const h = setInterval(() => setNow(Date.now()), 250); return () => clearInterval(h); }, []);
+  useLeaveGuard(s?.phase === 'playing');
 
   useEffect(() => {
     let closed = false;

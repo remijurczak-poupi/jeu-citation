@@ -154,7 +154,10 @@ export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; mes
 // ----- Clubs & countries war -----
 /** key = club Wikidata id or country code; points = sum of the supporters' daily challenge counts. */
 export interface WarRow { rank: number; key: string; points: number; players: number }
-export interface WarBoard { by: 'club' | 'country'; period: 'week' | 'all'; from: string; rows: WarRow[]; me: WarRow | null; total: number }
+export type WarMetric = 'points' | 'supporters';
+/** points: daily challenge points (period week | all); supporters: profiles that played in the period (week | month). */
+export interface WarBoard { by: 'club' | 'country'; metric: WarMetric; period: string; rows: WarRow[]; me: WarRow | null; total: number }
+export interface ClubStanding { q: string; rank: number | null; active: number; supporters: number; clubs: number }
 
 // ----- Rankings -----
 /** Themes with a best-game leaderboard: the 5 leagues together, each league, the World Cup. */

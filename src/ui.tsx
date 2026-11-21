@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getSession, setSession } from './api';
 import { useI18n, type Lang, type T } from './i18n';
 import { clubName, COUNTRIES, countryName, flag, leagueName, seasonLabel } from './format';
+import { fanClubName, loadFanClubs, searchClubs } from './clubs';
 import { RANKED_THEMES } from '../shared/types';
-import type { SignInResult, Badge, BoardKind, BoardPeriod, Suggestion, WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
+import type { ClubStanding, WarMetric, SignInResult, Badge, BoardKind, BoardPeriod, Suggestion, WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
 
 // ---------- Stadium curtain ----------
 /** One half of an illustrated (original, generic) stadium. The two halves meet on the halfway line. */
@@ -346,19 +347,52 @@ function Standing({ total, me, dist }: { total: number; me: LeaderboardRow | nul
   );
 }
 
+// ---------- Club picker ----------
+/** Search box over all supportable clubs (names in every language, typos forgiven). Empty: clubs of the chosen country. */
+export function ClubPicker({ meta, value, country, onChange }: { meta: Meta; value: string; country?: string; onChange: (q: string) => void }) {
+  const { t, lang } = useI18n();
+  const [ready, setReady] = useState(false);
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(!value);
+  useEffect(() => { loadFanClubs().then(() => setReady(true)).catch(() => {}); }, []);
+  const results = useMemo(() => (ready ? searchClubs(query, country) : []), [ready, query, country]);
+  if (!open) return (
+    <button type="button" className="club-chosen" onClick={() => { setOpen(true); setQuery(''); }}>
+      <span>{value === 'other' ? t.otherClub : clubName(meta, value, lang, t)}</span><small>{t.change}</small>
+    </button>
+  );
+  const pick = (q: string) => { onChange(q); setOpen(false); };
+  return (
+    <div className="club-picker">
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.searchClub} autoComplete="off" autoFocus={!!value} />
+      {!ready ? <p className="hint">…</p> : (
+        <ul className="club-results" role="listbox">
+          {!query.trim() && results.length > 0 && <li className="suggest-title">{t.clubsOfCountry}</li>}
+          {results.map((c) => (
+            <li key={c.q} role="option" aria-selected={c.q === value} className={c.q === value ? 'on' : ''} onClick={() => pick(c.q)}>
+              <span>{fanClubName(c, lang)}</span><small>{flag(c.c)}</small>
+            </li>
+          ))}
+          {query.trim() && results.length === 0 && <li className="suggest-title">{t.noClubFound}</li>}
+          <li className="other" onClick={() => pick('other')}>{t.otherClub}</li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ---------- Profile ----------
 // The profile lives in this browser (a guest profile). Signing in is optional: it saves the
 // profile to an e-mail address so it can be opened on another device.
-export function ProfileForm({ meta, onDone }: { meta: Meta; onDone: () => void }) {
+export function ProfileForm({ meta, onDone, presetClub }: { meta: Meta; onDone: () => void; presetClub?: string }) {
   const { t, lang } = useI18n();
   const s = getSession();
   const [pseudo, setPseudo] = useState(s?.pseudo ?? '');
-  const [club, setClub] = useState(s?.club ?? '');
+  const [club, setClub] = useState(presetClub ?? s?.club ?? '');
   const [country, setCountry] = useState(s?.country ?? (lang === 'fr' ? 'FR' : ''));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const countries = useMemo(() => COUNTRIES.map((c) => ({ c, n: countryName(c, lang) })).sort((a, b) => a.n.localeCompare(b.n)), [lang]);
-  const clubs = useMemo(() => [...meta.clubs].sort((a, b) => clubName(meta, a.q, lang).localeCompare(clubName(meta, b.q, lang))), [meta, lang]);
 
   const submit = async () => {
     setBusy(true); setError('');
@@ -378,20 +412,16 @@ export function ProfileForm({ meta, onDone }: { meta: Meta; onDone: () => void }
         <p className="hint">{t.profileHint}</p>
         <label><span>{t.pseudo}</span><input value={pseudo} maxLength={16} onChange={(e) => setPseudo(e.target.value)} autoComplete="nickname" /></label>
         <label>
-          <span>{t.supportedClub}</span>
-          <select value={club} onChange={(e) => setClub(e.target.value)}>
-            <option value="" disabled>—</option>
-            {clubs.map((c) => <option key={c.q} value={c.q}>{clubName(meta, c.q, lang)}</option>)}
-            <option value="other">{t.otherClub}</option>
-          </select>
-        </label>
-        <label>
           <span>{t.country}</span>
           <select value={country} onChange={(e) => setCountry(e.target.value)}>
             <option value="" disabled>—</option>
             {countries.map(({ c, n }) => <option key={c} value={c}>{flag(c)} {n}</option>)}
           </select>
         </label>
+        <div className="field">
+          <span>{t.supportedClub}</span>
+          <ClubPicker meta={meta} value={club} country={country} onChange={setClub} />
+        </div>
         {error && <p className="error">{error}</p>}
         <button className="primary" disabled={busy || !pseudo || !club || !country} onClick={submit}>{t.save}</button>
       </div>
@@ -515,14 +545,20 @@ export function ChainView({ links, done }: { links: ChainLink[]; done?: boolean 
 export function War({ meta }: { meta: Meta }) {
   const { t, lang } = useI18n();
   const [by, setBy] = useState<'club' | 'country'>('club');
-  const [period, setPeriod] = useState<'week' | 'all'>('week');
+  const [metric, setMetric] = useState<WarMetric>('supporters');
+  const periods = metric === 'supporters' ? ['week', 'month'] : ['week', 'all'];
+  const [period, setPeriod] = useState('week');
   const [board, setBoard] = useState<WarBoard | null>(null);
-  useEffect(() => { setBoard(null); api.war(by, period).then(setBoard).catch(() => {}); }, [by, period]);
+  const [, setReady] = useState(false);
+  useEffect(() => { loadFanClubs().then(() => setReady(true)).catch(() => {}); }, []);
+  useEffect(() => { if (!periods.includes(period)) setPeriod('week'); }, [metric]);
+  useEffect(() => { setBoard(null); api.war(by, metric, period).then(setBoard).catch(() => {}); }, [by, metric, period]);
   const label = (k: string) => (by === 'club' ? clubName(meta, k, lang, t) : `${flag(k)} ${countryName(k, lang)}`);
-  const row = (r: WarRow, me?: boolean) => (
-    <li key={r.key} className={me ? 'me' : ''}>
+  const me = getSession();
+  const row = (r: WarRow, mine?: boolean) => (
+    <li key={r.key} className={mine ? 'me' : ''}>
       <span className="lb-rank">{r.rank}</span>
-      <span className="lb-name">{label(r.key)}<small>{t.war.supporters(r.players)}</small></span>
+      <span className="lb-name">{label(r.key)}<small>{metric === 'supporters' ? t.war.activeHint : t.war.supporters(r.players)}</small></span>
       <span className="lb-score">{r.points}</span>
     </li>
   );
@@ -530,13 +566,73 @@ export function War({ meta }: { meta: Meta }) {
     <div className="leaderboard war">
       <div className="tabs">
         {(['club', 'country'] as const).map((b) => <button key={b} className={by === b ? 'on' : ''} onClick={() => setBy(b)}>{b === 'club' ? t.war.clubs : t.war.countries}</button>)}
-        {(['week', 'all'] as const).map((p) => <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{p === 'week' ? t.war.week : t.war.all}</button>)}
       </div>
+      <div className="tabs">
+        {(['supporters', 'points'] as const).map((m) => <button key={m} className={metric === m ? 'on' : ''} onClick={() => setMetric(m)}>{m === 'supporters' ? t.war.bySupporters : t.war.byPoints}</button>)}
+        {periods.map((p) => <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{p === 'week' ? t.war.week : p === 'month' ? t.war.month : t.war.all}</button>)}
+      </div>
+      <p className="hint">{metric === 'supporters' ? t.war.supportersHint : t.war.pointsHint}</p>
+      {by === 'club' && me && me.club !== 'other' && <ShareClub q={me.club} name={clubName(meta, me.club, lang, t)} />}
       {!board ? <p className="hint">…</p> : board.rows.length === 0 ? <p className="hint">{t.war.empty}</p> : (
         <ol>
           {board.rows.map((r) => row(r, board.me?.key === r.key))}
           {board.me && !board.rows.some((r) => r.key === board.me!.key) && <><li className="sep">…</li>{row(board.me, true)}</>}
         </ol>
+      )}
+    </div>
+  );
+}
+
+/** "Come and support <club>": shares a link to the club's page. */
+export function ShareClub({ q, name }: { q: string; name: string }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const share = async () => {
+    const url = `${location.origin}/#/club/${q}`;
+    const text = t.war.shareText(name);
+    try {
+      if (navigator.share) { await navigator.share({ text, url }); return; }
+      await navigator.clipboard.writeText(`${text} ${url}`); setCopied(true); setTimeout(() => setCopied(false), 2000);
+    } catch { /* cancelled */ }
+  };
+  return <button className="share-club" onClick={share}>📣 {copied ? t.copied : t.war.shareButton(name)}</button>;
+}
+
+/** Landing page of a shared club link: the club's standing and a button to support it. */
+export function ClubPage({ meta, q, onSupport }: { meta: Meta; q: string; onSupport: () => void }) {
+  const { t, lang } = useI18n();
+  const [st, setSt] = useState<ClubStanding | null>(null);
+  const [error, setError] = useState(false);
+  const [, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { loadFanClubs().then(() => setReady(true)).catch(() => {}); api.club(q).then(setSt).catch(() => setError(true)); }, [q]);
+  const s = getSession();
+  const name = clubName(meta, q, lang, t);
+  const mine = s?.club === q;
+  const support = async () => {
+    if (!s) { onSupport(); return; }
+    setBusy(true);
+    try {
+      const r = await api.saveProfile({ pseudo: s.pseudo, club: q, country: s.country });
+      setSession({ ...s, club: r.club });
+      onSupport();
+    } finally { setBusy(false); }
+  };
+  if (error) return <div className="card"><p className="hint">{t.errorsMap.server_error}</p></div>;
+  return (
+    <div className="card club-page">
+      <p className="eyebrow">{t.war.clubPageEyebrow}</p>
+      <h2>{name}</h2>
+      {st && (
+        <div className="club-stats">
+          <div><strong>{st.rank ? ordinal(st.rank, lang) : '–'}</strong><span>{t.war.clubRankLabel}</span></div>
+          <div><strong>{st.active}</strong><span>{t.war.activeThisWeek}</span></div>
+          <div><strong>{st.supporters}</strong><span>{t.war.allSupporters}</span></div>
+        </div>
+      )}
+      <p className="hint">{t.war.clubPageHint}</p>
+      {mine ? <><p className="ok-note">✓ {t.war.youSupport}</p><ShareClub q={q} name={name} /></> : (
+        <button className="primary big" disabled={busy} onClick={support}>{t.war.supportButton(name)}</button>
       )}
     </div>
   );
