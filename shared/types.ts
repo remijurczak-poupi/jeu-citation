@@ -74,7 +74,10 @@ export interface Meta {
   playerCount: number;
   nationalities: string[]; // codes present in the data, most frequent first
   tournaments: MetaTournament[];
+  auth?: { google: string | null; email: boolean }; // optional sign-in methods configured on the server
 }
+
+export type SignInResult = { status: 'linked'; email: string } | { status: 'no_profile' } | { status: 'signed_in'; email: string; session: Profile & { id: string; secret: string } };
 
 export interface Profile { pseudo: string; club: string; country: string }
 
@@ -95,11 +98,13 @@ export interface GameState {
   dailyDate?: string;
   archive?: boolean; // replay of a past daily challenge, not ranked
   chain?: ChainLink[]; // chain mode: the starting player then each answer, with the club they shared
+  rankedTheme?: string; // id in RANKED_THEMES when the theme has a best-game board
 }
 export interface ChainLink { name: string; club?: string; seasons?: string }
 
 /** A player proposed while typing (from the whole base, so it never reveals the answers). */
-export interface Suggestion { q: string; n: string; y?: number; c?: string; p?: Position }
+/** A player in a list. Details (birth year, nationality, position, main club, seasons) only come with homonyms, and never one tied to the theme. */
+export interface Suggestion { q: string; n: string; y?: number; c?: string; p?: Position; club?: string; from?: number; to?: number }
 export type GuessOutcome =
   | { status: 'ambiguous'; options: Suggestion[] } // several well-known players share this name: pick one (not counted)
   | { status: 'ok'; name: string }
@@ -150,3 +155,20 @@ export type RoomServerMsg = { t: 'state'; state: RoomState } | { t: 'error'; mes
 /** key = club Wikidata id or country code; points = sum of the supporters' daily challenge counts. */
 export interface WarRow { rank: number; key: string; points: number; players: number }
 export interface WarBoard { by: 'club' | 'country'; period: 'week' | 'all'; from: string; rows: WarRow[]; me: WarRow | null; total: number }
+
+// ----- Rankings -----
+/** Themes with a best-game leaderboard: the 5 leagues together, each league, the World Cup. */
+export const RANKED_THEMES: { id: string; criterion: Criterion }[] = [
+  { id: 'all', criterion: {} },
+  { id: 'PL', criterion: { league: 'PL' } },
+  { id: 'L1', criterion: { league: 'L1' } },
+  { id: 'LL', criterion: { league: 'LL' } },
+  { id: 'SA', criterion: { league: 'SA' } },
+  { id: 'BL', criterion: { league: 'BL' } },
+  { id: 'WC', criterion: { tournament: 'WC' } },
+];
+/** total = players named over the period, all themes together; best = best single game on a ranked theme. */
+export type BoardKind = 'total' | 'best';
+export type BoardPeriod = 'day' | 'week' | 'month' | 'year' | 'all';
+/** "Top 5 % in Ligue 1": share of players with fewer players named (all modes, all time) in that league. */
+export interface Badge { scope: string; top: number; rank: number; total: number }

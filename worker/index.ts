@@ -1,18 +1,21 @@
 // API Worker: profiles, solo games, daily challenge, leaderboards and private rooms.
 import { Hono, type Context } from 'hono';
-import { data, normalizeCriterion, scopeSize, criterionKey, suggest, suggestion } from './data';
+import { data, normalizeCriterion, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
 import { dailyCriterion, dailyNumber, todayKey } from './daily';
 import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
-import type { WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
-import { MODE_RULES, SOLO_MODES as SOLO_LIST } from '../shared/types';
+import type { Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
+import { MODE_RULES, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
 
 export { Room } from './room';
 
 interface Env {
   DB: D1Database;
+  GOOGLE_CLIENT_ID?: string; // OAuth web client id: enables Sign in with Google
+  RESEND_API_KEY?: string; // enables e-mail sign-in links (sent with Resend)
+  MAIL_FROM?: string; // sender of those e-mails, e.g. Name the Players <login@example.com>
   ROOMS: DurableObjectNamespace;
   ASSETS: Fetcher;
 }
@@ -53,9 +56,11 @@ const validCountry = (c: unknown) => typeof c === 'string' && /^([A-Z]{2}|GB-(EN
 
 async function auth(env: Env, id?: string | null, secret?: string | null): Promise<Me | null> {
   if (!id || !secret) return null;
-  const row = await env.DB.prepare('SELECT id, pseudo, club, country FROM profiles WHERE id = ? AND secret_hash = ?')
-    .bind(id, await sha256(normSecret(secret)))
-    .first<Me>();
+  const hash = await sha256(normSecret(secret));
+  const row = await env.DB.prepare(
+    `SELECT id, pseudo, club, country FROM profiles WHERE id = ?1
+     AND (secret_hash = ?2 OR EXISTS (SELECT 1 FROM device_sessions WHERE secret_hash = ?2 AND profile_id = ?1))`,
+  ).bind(id, hash).first<Me>();
   return row ?? null;
 }
 
@@ -106,7 +111,7 @@ app.get('/api/meta', (c) => {
     })(),
   };
   c.header('Cache-Control', 'public, max-age=3600');
-  return c.json(metaCache);
+  return c.json({ ...metaCache, auth: { google: c.env.GOOGLE_CLIENT_ID || null, email: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM) } });
 });
 
 app.post('/api/theme/size', async (c) => {
@@ -138,13 +143,80 @@ app.post('/api/profile', async (c) => {
   return c.json({ id, secret, pseudo, club: body.club, country: body.country });
 });
 
-app.post('/api/profile/recover', async (c) => {
-  const { code } = (await c.req.json().catch(() => ({}))) as { code?: string };
-  if (typeof code !== 'string') throw new HttpError(400, 'bad_code');
-  const secret = normSecret(code);
-  const row = await c.env.DB.prepare('SELECT id, pseudo, club, country FROM profiles WHERE secret_hash = ?').bind(await sha256(secret)).first<Me>();
-  if (!row) throw new HttpError(404, 'unknown_code');
-  return c.json({ ...row, secret });
+// ---------- optional sign-in (find your profile on another device) ----------
+/**
+ * Links the e-mail to the current profile if neither has an account yet; otherwise opens the
+ * profile that owns the e-mail on this device (with a new device secret).
+ */
+async function signIn(c: C, email: string, provider: 'google' | 'email', deviceId: string | null) {
+  const e = email.trim().toLowerCase();
+  const owner = await c.env.DB.prepare('SELECT profile_id FROM accounts WHERE email = ?').bind(e).first<{ profile_id: string }>();
+  if (!owner) {
+    if (!deviceId) return { status: 'no_profile' as const };
+    const linked = await c.env.DB.prepare('SELECT email FROM accounts WHERE profile_id = ?').bind(deviceId).first();
+    if (linked) throw new HttpError(409, 'other_account');
+    await c.env.DB.prepare('INSERT INTO accounts (email, profile_id, provider, created_at) VALUES (?, ?, ?, ?)').bind(e, deviceId, provider, Date.now()).run();
+    return { status: 'linked' as const, email: e };
+  }
+  const p = await c.env.DB.prepare('SELECT id, pseudo, club, country FROM profiles WHERE id = ?').bind(owner.profile_id).first<Me>();
+  if (!p) throw new HttpError(404, 'profile_not_found');
+  const secret = newSecret();
+  await c.env.DB.prepare('INSERT INTO device_sessions (secret_hash, profile_id, created_at) VALUES (?, ?, ?)').bind(await sha256(secret), p.id, Date.now()).run();
+  return { status: 'signed_in' as const, email: e, session: { ...p, secret } };
+}
+
+app.get('/api/account', async (c) => {
+  const me = requireMe(c);
+  const row = await c.env.DB.prepare('SELECT email, provider FROM accounts WHERE profile_id = ?').bind(me.id).first<{ email: string; provider: string }>();
+  return c.json(row ?? null);
+});
+
+app.post('/api/auth/google', async (c) => {
+  if (!c.env.GOOGLE_CLIENT_ID) throw new HttpError(404, 'not_configured');
+  const { credential } = (await c.req.json().catch(() => ({}))) as { credential?: string };
+  if (typeof credential !== 'string' || credential.length > 4096) throw new HttpError(400, 'bad_token');
+  // Google checks the signature and expiry; we check it was issued for this site.
+  const res = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential));
+  if (!res.ok) throw new HttpError(401, 'bad_token');
+  const info = (await res.json()) as { aud?: string; email?: string; email_verified?: string | boolean };
+  if (info.aud !== c.env.GOOGLE_CLIENT_ID || !info.email || String(info.email_verified) !== 'true') throw new HttpError(401, 'bad_token');
+  return c.json(await signIn(c, info.email, 'google', c.get('me')?.id ?? null));
+});
+
+app.post('/api/auth/email', async (c) => {
+  if (!c.env.RESEND_API_KEY || !c.env.MAIL_FROM) throw new HttpError(404, 'not_configured');
+  const { email, lang } = (await c.req.json().catch(() => ({}))) as { email?: string; lang?: string };
+  if (typeof email !== 'string' || email.length > 200 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, 'bad_email');
+  const e = email.trim().toLowerCase();
+  const recent = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM email_tokens WHERE email = ? AND expires_at > ?').bind(e, Date.now()).first<{ n: number }>();
+  if ((recent?.n ?? 0) >= 3) throw new HttpError(429, 'too_many_emails');
+  const token = randomCode(32);
+  await c.env.DB.prepare('INSERT INTO email_tokens (token_hash, email, device_id, expires_at) VALUES (?, ?, ?, ?)')
+    .bind(await sha256(token), e, c.get('me')?.id ?? null, Date.now() + 15 * 60_000).run();
+  const link = `${new URL(c.req.url).origin}/#/login/${token}`;
+  const fr = lang === 'fr';
+  const sent = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${c.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: c.env.MAIL_FROM,
+      to: [e],
+      subject: fr ? 'Ton lien de connexion' : 'Your sign-in link',
+      text: (fr ? 'Clique sur ce lien pour te connecter (valable 15 minutes) :\n' : 'Click this link to sign in (valid for 15 minutes):\n') + link,
+    }),
+  });
+  if (!sent.ok) throw new HttpError(502, 'email_failed');
+  return c.json({ ok: true });
+});
+
+app.post('/api/auth/email/verify', async (c) => {
+  const { token } = (await c.req.json().catch(() => ({}))) as { token?: string };
+  if (typeof token !== 'string' || token.length > 64) throw new HttpError(400, 'bad_token');
+  const hash = await sha256(token);
+  const row = await c.env.DB.prepare('SELECT email, device_id, expires_at FROM email_tokens WHERE token_hash = ?').bind(hash).first<{ email: string; device_id: string | null; expires_at: number }>();
+  await c.env.DB.prepare('DELETE FROM email_tokens WHERE token_hash = ? OR expires_at < ?').bind(hash, Date.now()).run();
+  if (!row || row.expires_at < Date.now()) throw new HttpError(401, 'link_expired');
+  return c.json(await signIn(c, row.email, 'email', c.get('me')?.id ?? row.device_id));
 });
 
 // ---------- solo games ----------
@@ -167,16 +239,19 @@ async function saveGame(c: C, g: GameRow, prevVersion: number, wasActive: boolea
     const theme = criterionKey(JSON.parse(g.criterion));
     const found: string[] = JSON.parse(g.found);
     const stmts = [
-      c.env.DB.prepare('INSERT OR IGNORE INTO scores (game_id, device_id, board_key, score, count, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(g.id, g.device_id, g.board_key, scoreOf(g), g.count, g.last_at),
+      c.env.DB.prepare('INSERT OR IGNORE INTO scores (game_id, device_id, board_key, score, count, created_at, mode, league) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(g.id, g.device_id, g.board_key, scoreOf(g), g.count, g.last_at, g.board_key.startsWith('archive:') ? 'archive' : g.mode, (JSON.parse(g.criterion) as Criterion).league ?? null),
       ...found.map((q) => c.env.DB.prepare('INSERT INTO citations (theme_key, player, n) VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET n = n + 1').bind(theme, q)),
     ];
     for (let i = 0; i < stmts.length; i += 100) await c.env.DB.batch(stmts.slice(i, i + 100));
   }
 }
 
+/** Best-game boards exist for the daily challenge and the big themes only. */
+const isRankedBoard = (g: GameRow) => g.daily_date !== null || (g.mode !== 'daily' && rankedThemeId(JSON.parse(g.criterion)) !== undefined);
+
 async function rankOf(c: C, g: GameRow) {
-  if (g.status !== 'finished') return {};
+  if (g.status !== 'finished' || !isRankedBoard(g)) return {};
   const row = await c.env.DB.prepare(
     `WITH best AS (SELECT device_id, MAX(score) AS s FROM scores WHERE board_key = ? GROUP BY device_id)
      SELECT (SELECT COUNT(*) FROM best WHERE s > ?) + 1 AS rank, (SELECT COUNT(*) FROM best) AS total`,
@@ -310,9 +385,11 @@ app.get('/api/leaderboard', async (c) => {
   if (!SOLO_MODES.includes(mode)) throw new HttpError(400, 'bad_mode');
   const ranking: Ranking = q.ranking === 'rarity' && mode === 'daily' ? 'rarity' : 'count';
   const date = q.date && /^\d{4}-\d{2}-\d{2}$/.test(q.date) ? q.date : todayKey();
-  const board = mode === 'daily' ? boardKey('daily', {}, date) : boardKey(mode, parseCriterion(q));
-  const period = q.period === 'day' ? 86400_000 : q.period === 'week' ? 7 * 86400_000 : null;
-  const since = mode === 'daily' || !period ? 0 : Date.now() - period;
+  const kind: BoardKind = q.kind === 'total' ? 'total' : 'best';
+  const period: BoardPeriod = (['day', 'week', 'month', 'year', 'all'] as const).find((p) => p === q.period) ?? (kind === 'total' ? 'week' : 'all');
+  const since = periodStart(period);
+  const theme = RANKED_THEMES.find((r) => r.id === q.theme) ?? RANKED_THEMES[0];
+  const board = mode === 'daily' ? boardKey('daily', {}, date) : boardKey(mode, normalizeCriterion(theme.criterion));
 
   let rows: { device_id: string; score: number }[];
   if (ranking === 'rarity') {
@@ -320,10 +397,16 @@ app.get('/api/leaderboard', async (c) => {
     const founds = games.results.map((g) => JSON.parse(g.found) as string[]);
     const tiers = rarityTiers(founds);
     rows = games.results.map((g, i) => ({ device_id: g.device_id, score: founds[i].reduce((s, q2) => s + (tiers.get(q2) ?? 1), 0) }));
+  } else if (kind === 'total') {
+    // Players named over the period in this mode, whatever the theme.
+    const res = await c.env.DB.prepare(
+      `SELECT device_id, SUM(count) AS score FROM scores WHERE mode = ? AND created_at >= ? GROUP BY device_id`,
+    ).bind(mode, since).all<{ device_id: string; score: number }>();
+    rows = res.results;
   } else {
     const res = await c.env.DB.prepare(
       `SELECT device_id, MAX(score) AS score FROM scores WHERE board_key = ? AND created_at >= ? GROUP BY device_id`,
-    ).bind(board, since).all<{ device_id: string; score: number }>();
+    ).bind(board, mode === 'daily' ? 0 : since).all<{ device_id: string; score: number }>();
     rows = res.results;
   }
   rows.sort((a, b) => b.score - a.score);
@@ -344,11 +427,60 @@ app.get('/api/leaderboard', async (c) => {
   };
   return c.json({
     board,
+    kind,
+    period,
     ranking,
     total: rows.length,
+    dist: distribution(rows.map((r) => r.score)),
     rows: top.map(toRow),
     me: myIdx >= 0 ? toRow(rows[myIdx], myIdx) : null,
   });
+});
+
+/** How many players per score bracket (at most 40 brackets), to draw the curve. */
+function distribution(scores: number[]): { width: number; counts: number[] } {
+  if (!scores.length) return { width: 1, counts: [] };
+  const max = Math.max(...scores);
+  const width = Math.max(1, Math.ceil((max + 1) / 40));
+  const counts = new Array(Math.floor(max / width) + 1).fill(0);
+  for (const v of scores) counts[Math.floor(Math.max(0, v) / width)]++;
+  return { width, counts };
+}
+
+/** Start of the period in ms, by Paris calendar (week starts on Monday). */
+function periodStart(period: BoardPeriod): number {
+  if (period === 'all') return 0;
+  const today = todayKey();
+  const noon = Date.parse(today + 'T12:00:00Z');
+  let day = today;
+  if (period === 'week') day = todayKey(noon - ((new Date(noon).getUTCDay() + 6) % 7) * 86400_000);
+  else if (period === 'month') day = today.slice(0, 8) + '01';
+  else if (period === 'year') day = today.slice(0, 5) + '01-01';
+  return Date.parse(day + 'T00:00:00+01:00');
+}
+
+// ---------- badges ----------
+// "Top 5 % in Ligue 1": players named in all games of a league (any mode and filters), against everyone who played it.
+const BADGE_TOPS = [1, 5, 10, 25];
+const BADGE_MIN_PLAYERS = 10;
+app.get('/api/badges', async (c) => {
+  const me = requireMe(c);
+  const res = await c.env.DB.prepare(
+    `SELECT COALESCE(league, 'all') AS scope, device_id, SUM(count) AS n FROM scores WHERE mode <> 'archive' GROUP BY scope, device_id
+     UNION ALL SELECT 'all5', device_id, SUM(count) FROM scores WHERE mode <> 'archive' GROUP BY device_id`,
+  ).all<{ scope: string; device_id: string; n: number }>();
+  const byScope = new Map<string, { device_id: string; n: number }[]>();
+  for (const r of res.results) if (r.scope !== 'all') (byScope.get(r.scope) ?? byScope.set(r.scope, []).get(r.scope)!).push(r);
+  const badges: Badge[] = [];
+  for (const [scope, rows] of byScope) {
+    const mine = rows.find((r) => r.device_id === me.id);
+    if (!mine || rows.length < BADGE_MIN_PLAYERS || mine.n === 0) continue;
+    const rank = rows.filter((r) => r.n > mine.n).length + 1;
+    const top = BADGE_TOPS.find((p) => rank <= Math.max(1, Math.floor((rows.length * p) / 100)));
+    if (top) badges.push({ scope: scope === 'all5' ? 'all' : scope, top, rank, total: rows.length });
+  }
+  badges.sort((a, b) => a.top - b.top);
+  return c.json(badges);
 });
 
 // ---------- suggestions while typing ----------
@@ -356,7 +488,9 @@ app.get('/api/leaderboard', async (c) => {
 app.get('/api/suggest', (c) => {
   const q = c.req.query('q') ?? '';
   c.header('Cache-Control', 'public, max-age=3600');
-  return c.json(suggest(q.slice(0, 60)).map(suggestion));
+  let crit: Criterion | undefined;
+  try { const raw = c.req.query('c'); if (raw) crit = normalizeCriterion(JSON.parse(raw)); } catch { crit = undefined; }
+  return c.json(describeList(suggest(q.slice(0, 60)), crit));
 });
 
 // ---------- clubs & countries war ----------

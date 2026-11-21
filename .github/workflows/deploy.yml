@@ -42,4 +42,17 @@ jobs:
         run: npm run build
 
       - name: Deploy
-        run: npx wrangler deploy
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          MAIL_FROM: ${{ vars.MAIL_FROM }}
+        run: |
+          # Optional sign-in: Google client id and sender address are public repo variables.
+          VARS=""
+          [ -n "$GOOGLE_CLIENT_ID" ] && VARS="$VARS --var GOOGLE_CLIENT_ID:$GOOGLE_CLIENT_ID"
+          [ -n "$MAIL_FROM" ] && VARS="$VARS --var MAIL_FROM:$MAIL_FROM"
+          npx wrangler deploy $VARS
+
+      - name: E-mail key (optional)
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: if [ -n "$RESEND_API_KEY" ]; then echo "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY; fi

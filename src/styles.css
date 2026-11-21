@@ -157,9 +157,7 @@ label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; fo
 .history-mine { font-size: 12px; }
 
 /* profile */
-.profile .recovery, .recovery-box .recovery { display: block; font-size: 22px; letter-spacing: 0.08em; text-align: center; padding: 14px; background: #050d09; border-radius: 12px; margin: 8px 0 14px; color: var(--accent); }
 .profile button.primary { width: 100%; }
-.recovery-box { margin-top: 14px; color: var(--muted); }
 
 /* rooms */
 .join { display: flex; gap: 10px; }
@@ -259,3 +257,36 @@ label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; fo
 .duel2-shadow { position: absolute; bottom: 10px; width: 30px; height: 6px; margin-left: -15px; border-radius: 50%; background: rgba(0, 0, 0, 0.35); z-index: 1; }
 .variant { display: grid; gap: 6px; margin-top: 12px; }
 .variant .tabs { flex-wrap: wrap; }
+
+/* ---------- Rankings ---------- */
+.kind-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 4px; }
+.kind-tabs button { display: grid; gap: 2px; text-align: left; padding: 10px 12px; }
+.kind-tabs button small { color: var(--muted); font-weight: 400; }
+.kind-tabs button.on { border-color: var(--accent); background: rgba(230, 194, 41, 0.1); }
+.tabs.ranked-themes { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.tabs.ranked-themes button { padding: 6px 12px; font-size: 13px; }
+.tabs.ranked-themes button.on { background: var(--accent); color: var(--accent-ink); }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.badge-pill { padding: 5px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; border: 1px solid var(--line); background: var(--card2); }
+.badge-pill.top1 { border-color: var(--accent); color: var(--accent); }
+.badge-pill.top5 { border-color: #d6d6d6; }
+
+.sign-in { margin-top: 16px; }
+.sign-in .google-btn { display: flex; justify-content: center; margin: 10px 0; min-height: 44px; }
+.email-link { display: flex; gap: 8px; margin-top: 8px; }
+.email-link input { flex: 1; min-width: 0; }
+.standing { margin: 6px 0 14px; }
+.standing-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.standing-rank { font-family: var(--font-display); font-size: 26px; letter-spacing: 0.02em; }
+.standing-top { font-family: var(--font-display); font-size: 26px; color: var(--accent); }
+.dist { margin: 6px 0 0; }
+.dist figcaption { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.dist svg { width: 100%; height: auto; display: block; }
+.dist-bar { fill: var(--muted); opacity: 0.45; }
+.dist-bar.mine { opacity: 1; }
+.dist-bar.mine { fill: var(--accent); }
+.dist g:hover .dist-bar:not(.mine) { opacity: 0.8; }
+.dist-axis { stroke: var(--line); stroke-width: 1; }
+.dist-tick { fill: var(--muted); font-size: 10px; }
+.dist-you { fill: var(--text); font-size: 10px; font-weight: 600; }
+.dist-tip { font-size: 12px; color: var(--muted); margin: 2px 0 0; min-height: 1.2em; }

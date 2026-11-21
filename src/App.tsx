@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, getSession } from './api';
 import { dictionaries, I18n, initialLang, LANGS, useI18n, type Lang } from './i18n';
 import { themeLabel } from './format';
-import { Leaderboard, ProfileForm, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
+import { Badges, Leaderboard, LoginLink, ProfileForm, RankedThemePicker, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
 import { GameScreen } from './screens/Game';
 import { RoomScreen, RoomHome } from './screens/Room';
-import type { Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
+import type { BoardKind, Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
 import { MODE_RULES, SOLO_GROUPS } from '../shared/types';
 
 // ---------- tiny hash router ----------
@@ -53,6 +53,7 @@ export default function App() {
 
   let screen;
   if (!meta) screen = null;
+  else if (parts[0] === 'login' && parts[1]) screen = <div className="page narrow"><LoginLink token={parts[1]} onDone={() => { setHasProfile(!!getSession()); nav.go('/'); }} /></div>;
   else if (!hasProfile) screen = <div className="page narrow"><ProfileForm meta={meta} onDone={() => setHasProfile(true)} /></div>;
   else if (parts[0] === 'game' && parts[1]) screen = <GameScreen id={parts[1]} meta={meta} nav={nav} />;
   else if (parts[0] === 'solo') screen = <SoloSetup meta={meta} nav={nav} />;
@@ -218,20 +219,29 @@ function SoloSetup({ meta, nav }: { meta: Meta; nav: Nav }) {
 
 // ---------- Leaderboards ----------
 function Leaderboards({ meta }: { meta: Meta }) {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
   const [mode, setMode] = useState<SoloMode>('daily');
-  const [criterion, setCriterion] = useState<Criterion>({});
+  const [kind, setKind] = useState<BoardKind>('best');
+  const [theme, setTheme] = useState('all');
   return (
     <div className="page narrow">
       <section className="card">
         <h2>{t.leaderboards}</h2>
+        <Badges meta={meta} />
         <div className="modes compact">
           <button className={`mode ${mode === 'daily' ? 'on' : ''}`} onClick={() => setMode('daily')}><strong>{t.modes.daily}</strong></button>
         </div>
         <ModePicker mode={mode === 'daily' ? null : mode} onChange={setMode} compact />
-        {mode !== 'daily' && <ThemePicker meta={meta} value={criterion} onChange={setCriterion} />}
-        {mode !== 'daily' && <p className="hint">{themeLabel(criterion, meta, lang, t)}</p>}
-        <Leaderboard mode={mode} criterion={mode === 'daily' ? undefined : criterion} meta={meta} rarity={mode === 'daily'} />
+        <div className="kind-tabs">
+          {(['best', 'total'] as BoardKind[]).map((k) => (
+            <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>
+              <strong>{k === 'best' ? t.boardBest : t.boardTotal}</strong>
+              <small>{k === 'best' ? (mode === 'daily' ? t.dailyTitle : t.boardBestHint) : t.boardTotalHint}</small>
+            </button>
+          ))}
+        </div>
+        {kind === 'best' && mode !== 'daily' && <RankedThemePicker value={theme} onChange={setTheme} meta={meta} />}
+        <Leaderboard mode={mode} kind={kind} theme={theme} meta={meta} rarity={mode === 'daily'} />
       </section>
       <section className="card">
         <h2>{t.war.title}</h2>

@@ -1,6 +1,7 @@
 // Football dataset (built from Wikidata by scripts/build-data.mjs) and theme ("criterion") logic.
 import raw from '../src/data/football.json';
 import { boundedDistance, compact, surnameKeys, tolerance } from './normalize';
+import { RANKED_THEMES } from '../shared/types';
 import type { Criterion, LeagueId, Position, Suggestion } from '../shared/types';
 
 export interface Club {
@@ -343,10 +344,82 @@ export function suggest(input: string, limit = 8): number[] {
   for (let i = lo; i < prefixKeys.length && prefixKeys[i].k.startsWith(k) && found.size < 3000; i++) found.add(prefixKeys[i].p);
   return [...found].sort((a, b) => data.players[b].s - data.players[a].s).slice(0, limit);
 }
-export function suggestion(p: number): Suggestion {
+/** Main club (most appearances, else longest stint) and seasons played, for telling homonyms apart. */
+function career(p: number): { club?: number; from?: number; to?: number } {
+  let best: Stint | undefined, bestW = -1, from = Infinity, to = -Infinity;
+  for (const st of playerStints(p)) {
+    const [, , s, e, apps] = st;
+    const w = apps >= 0 ? apps * 100 : s >= 0 ? ((e >= 0 ? e : s) - s + 1) : 0;
+    if (w > bestW) { bestW = w; best = st; }
+    if (s >= 0) { from = Math.min(from, s); to = Math.max(to, e >= 0 ? e : data.players[p].x ? data.currentSeason : s); }
+  }
+  return { club: best?.[1], ...(from <= to ? { from, to } : {}) };
+}
+
+type Detail = 'club' | 'years' | 'c' | 'y' | 'p';
+/** Details that could give the answer away for this theme are never shown. */
+function allowedDetails(c?: Criterion): Detail[] {
+  const out: Detail[] = [];
+  if (!c || (!c.club && !c.club2 && !c.league)) out.push('club');
+  if (!c || (c.from === undefined && c.to === undefined && c.active === undefined && c.ageMin === undefined && c.ageMax === undefined)) out.push('years');
+  if (!c || !c.nationality) out.push('c');
+  if (!c || (c.ageMin === undefined && c.ageMax === undefined)) out.push('y');
+  if (!c || !c.position) out.push('p');
+  return out;
+}
+function detailValue(p: number, d: Detail): string | undefined {
   const pl = data.players[p];
-  return { q: pl.q, n: pl.n, ...(pl.b ? { y: pl.b } : {}), ...(pl.c?.[0] ? { c: pl.c[0] } : {}), ...(pl.p?.[0] ? { p: pl.p[0] } : {}) };
+  if (d === 'c') return pl.c?.[0];
+  if (d === 'p') return pl.p?.[0];
+  if (d === 'y') return pl.b ? String(pl.b) : undefined;
+  const k = career(p);
+  if (d === 'club') return k.club !== undefined ? data.clubs[k.club].n : undefined;
+  return k.from !== undefined ? `${k.from}-${k.to}` : undefined;
+}
+
+/**
+ * Players as shown in a list (suggestions, homonym choice). Only players whose name appears
+ * twice or more in the list get details, and only details unrelated to the theme
+ * (no flag on a nationality theme, no birth year on an age theme...), picking the first that tells them apart.
+ */
+export function describeList(ps: number[], c?: Criterion): Suggestion[] {
+  const out: Suggestion[] = ps.map((p) => ({ q: data.players[p].q, n: data.players[p].n }));
+  const groups = new Map<string, number[]>();
+  ps.forEach((p, i) => { const k = compact(data.players[p].n); groups.set(k, [...(groups.get(k) ?? []), i]); });
+  const allowed = allowedDetails(c);
+  for (const idx of groups.values()) {
+    if (idx.length < 2) continue;
+    const chosen: Detail[] = [];
+    for (const d of allowed) {
+      const vals = idx.map((i) => detailValue(ps[i], d));
+      if (vals.every((v) => v === undefined)) continue;
+      chosen.push(d);
+      if (new Set(vals).size === idx.length) break; // this one tells them all apart
+      if (chosen.length >= 2) break;
+    }
+    for (const i of idx) {
+      const p = ps[i], pl = data.players[p], s = out[i];
+      for (const d of chosen) {
+        if (d === 'c' && pl.c?.[0]) s.c = pl.c[0];
+        if (d === 'p' && pl.p?.[0]) s.p = pl.p[0];
+        if (d === 'y' && pl.b) s.y = pl.b;
+        if (d === 'club' || d === 'years') {
+          const k = career(p);
+          if (d === 'club' && k.club !== undefined) s.club = data.clubs[k.club].n;
+          if (d === 'years' && k.from !== undefined) { s.from = k.from; s.to = k.to; }
+        }
+      }
+    }
+  }
+  return out;
 }
 
 export const playerName = (p: number) => data.players[p].n;
+
+let rankedKeys: Map<string, string> | null = null;
+/** Id of the big theme (RANKED_THEMES) this criterion is, if any: only those have best-game boards. */
+export function rankedThemeId(c: Criterion): string | undefined {
+  rankedKeys ??= new Map(RANKED_THEMES.map((r) => [criterionKey(normalizeCriterion(r.criterion)), r.id]));
+  return rankedKeys.get(criterionKey(normalizeCriterion(c)));
+}
 export const scopeSize = (c: Criterion) => getMatcher(c).scope.players.size;

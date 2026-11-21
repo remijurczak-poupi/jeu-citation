@@ -1,9 +1,10 @@
 // Shared UI pieces: stadium curtain transition, silhouettes, theme picker, leaderboard, profile form.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, getSession, setSession } from './api';
-import { useI18n } from './i18n';
+import { useI18n, type Lang, type T } from './i18n';
 import { clubName, COUNTRIES, countryName, flag, leagueName, seasonLabel } from './format';
-import type { Suggestion, WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
+import { RANKED_THEMES } from '../shared/types';
+import type { SignInResult, Badge, BoardKind, BoardPeriod, Suggestion, WarBoard, WarRow, ChainLink, Criterion, LeaderboardRow, LeagueId, Meta, Position, Ranking, SoloMode } from '../shared/types';
 
 // ---------- Stadium curtain ----------
 /** One half of an illustrated (original, generic) stadium. The two halves meet on the halfway line. */
@@ -238,16 +239,23 @@ function MoreFilters({ meta, value, set, clubs }: { meta: Meta; value: Criterion
 }
 
 // ---------- Leaderboard ----------
-export function Leaderboard({ mode, criterion, date, meta, rarity }: { mode: SoloMode; criterion?: Criterion; date?: string; meta: Meta | null; rarity?: boolean }) {
+/**
+ * kind "total": players named over the period in this mode, all themes together.
+ * kind "best": best single game, on the daily challenge or a ranked theme (RANKED_THEMES id).
+ */
+export function Leaderboard({ mode, kind = 'best', theme, date, meta, rarity }: { mode: SoloMode; kind?: BoardKind; theme?: string; date?: string; meta: Meta | null; rarity?: boolean }) {
   const { t, lang } = useI18n();
-  const [period, setPeriod] = useState<'day' | 'week' | 'all'>('all');
+  const periods: BoardPeriod[] = kind === 'total' ? ['week', 'month', 'year'] : ['day', 'week', 'all'];
+  const [period, setPeriod] = useState<BoardPeriod>(periods[kind === 'total' ? 0 : 2]);
+  useEffect(() => { if (!periods.includes(period)) setPeriod(periods[kind === 'total' ? 0 : 2]); }, [kind]);
   const [ranking, setRanking] = useState<Ranking>('count');
-  const [data, setData] = useState<{ total: number; rows: LeaderboardRow[]; me: LeaderboardRow | null } | null>(null);
-  const key = JSON.stringify([mode, criterion, date, period, ranking]);
+  const [data, setData] = useState<{ total: number; dist?: { width: number; counts: number[] }; rows: LeaderboardRow[]; me: LeaderboardRow | null } | null>(null);
+  const daily = mode === 'daily' && kind === 'best';
+  const key = JSON.stringify([mode, kind, theme, date, period, ranking]);
   useEffect(() => {
     let alive = true;
     setData(null);
-    api.leaderboard({ mode, criterion, date, period, ranking }).then((d) => alive && setData(d)).catch(() => alive && setData({ total: 0, rows: [], me: null }));
+    api.leaderboard({ mode, kind, theme, date, period, ranking }).then((d) => alive && setData(d)).catch(() => alive && setData({ total: 0, rows: [], me: null }));
     return () => { alive = false; };
   }, [key]);
   const row = (r: LeaderboardRow) => (
@@ -261,11 +269,12 @@ export function Leaderboard({ mode, criterion, date, meta, rarity }: { mode: Sol
   return (
     <div className="leaderboard">
       <div className="tabs">
-        {mode === 'daily' && rarity
-          ? (['count', 'rarity'] as Ranking[]).map((r) => <button key={r} className={ranking === r ? 'on' : ''} onClick={() => setRanking(r)}>{r === 'count' ? t.byCount : t.byRarity}</button>)
-          : mode !== 'daily' && (['day', 'week', 'all'] as const).map((p) => <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{p === 'day' ? t.today : p === 'week' ? t.thisWeek : t.allTime}</button>)}
+        {daily
+          ? rarity && (['count', 'rarity'] as Ranking[]).map((r) => <button key={r} className={ranking === r ? 'on' : ''} onClick={() => setRanking(r)}>{r === 'count' ? t.byCount : t.byRarity}</button>)
+          : periods.map((p) => <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{t.periods[p]}</button>)}
       </div>
       {ranking === 'rarity' && <p className="hint">{t.rarityHint}</p>}
+      {data && data.total > 0 && <Standing total={data.total} me={data.me} dist={data.dist} />}
       {!data ? <p className="hint">…</p> : data.rows.length === 0 ? <p className="hint">{t.noScores}</p> : (
         <ol>
           {data.rows.map(row)}
@@ -276,7 +285,70 @@ export function Leaderboard({ mode, criterion, date, meta, rarity }: { mode: Sol
   );
 }
 
+/** Rank as an ordinal in the player's language: 118,000th, 118 000e, 118.000. */
+export function ordinal(n: number, lang: string) {
+  const num = new Intl.NumberFormat(lang).format(n);
+  if (lang === 'fr') return num + (n === 1 ? 'er' : 'e');
+  if (lang === 'de') return num + '.';
+  if (lang === 'es' || lang === 'pt') return num + '.º';
+  if (lang === 'it') return num + 'º';
+  const r = new Intl.PluralRules('en', { type: 'ordinal' }).select(n);
+  return num + (({ one: 'st', two: 'nd', few: 'rd' } as Record<string, string | undefined>)[r] ?? 'th');
+}
+/** Share of players at or above this rank, as shown: "4", "0.3", never "0". */
+export function topShareValue(rank: number, total: number, lang: string) {
+  const p = (rank / total) * 100;
+  const v = p >= 10 ? Math.ceil(p) : p >= 1 ? Math.ceil(p * 10) / 10 : Math.max(0.1, Math.ceil(p * 10) / 10);
+  return new Intl.NumberFormat(lang, { maximumFractionDigits: 1 }).format(v);
+}
+
+/** My rank, my percentile and how all players' scores spread out, with my bracket highlighted. */
+function Standing({ total, me, dist }: { total: number; me: LeaderboardRow | null; dist?: { width: number; counts: number[] } }) {
+  const { t, lang } = useI18n();
+  const [hover, setHover] = useState<number | null>(null);
+  const counts = dist?.counts ?? [];
+  const W = 320, H = 90, gap = 2;
+  const peak = Math.max(1, ...counts);
+  const bw = counts.length ? W / counts.length : W;
+  const mine = me && dist ? Math.floor(me.score / dist.width) : -1;
+  const range = (i: number) => [i * dist!.width, (i + 1) * dist!.width - 1] as const;
+  return (
+    <div className="standing">
+      {me && (
+        <div className="standing-head">
+          <span className="standing-rank">{t.rankOutOf(ordinal(me.rank, lang), new Intl.NumberFormat(lang).format(total))}</span>
+          <span className="standing-top">{t.topShare(topShareValue(me.rank, total, lang))}</span>
+        </div>
+      )}
+      {counts.length > 1 && (
+        <figure className="dist">
+          <figcaption>{t.distTitle}</figcaption>
+          <svg viewBox={`0 0 ${W} ${H + 16}`} role="img" aria-label={t.distTitle} onMouseLeave={() => setHover(null)}>
+            <line x1="0" x2={W} y1={H} y2={H} className="dist-axis" />
+            {counts.map((n, i) => {
+              const h = n ? Math.max(3, (n / peak) * (H - 6)) : 0;
+              const x = i * bw + gap / 2, w = Math.max(1, bw - gap);
+              return (
+                <g key={i} onMouseEnter={() => setHover(i)} onClick={() => setHover(i)}>
+                  <rect x={i * bw} y={0} width={bw} height={H} fill="transparent" />
+                  {h > 0 && <path className={i === mine ? 'dist-bar mine' : 'dist-bar'} d={`M${x},${H} V${H - h + Math.min(2, h / 2)} q0,-${Math.min(2, h / 2)} ${Math.min(2, w / 2)},-${Math.min(2, h / 2)} H${x + w - Math.min(2, w / 2)} q${Math.min(2, w / 2)},0 ${Math.min(2, w / 2)},${Math.min(2, h / 2)} V${H} Z`} />}
+                </g>
+              );
+            })}
+            {mine >= 0 && <text x={Math.min(W - 12, Math.max(12, (mine + 0.5) * bw))} y={H + 13} className="dist-you" textAnchor="middle">▲ {t.you}</text>}
+            <text x="0" y={H + 13} className="dist-tick">0</text>
+            {mine < 0 || (mine + 0.5) * bw < W - 40 ? <text x={W} y={H + 13} className="dist-tick" textAnchor="end">{range(counts.length - 1)[1]}</text> : null}
+          </svg>
+          <p className="dist-tip">{hover !== null ? t.distTip(range(hover)[0], range(hover)[1], counts[hover]) : '\u00a0'}</p>
+        </figure>
+      )}
+    </div>
+  );
+}
+
 // ---------- Profile ----------
+// The profile lives in this browser (a guest profile). Signing in is optional: it saves the
+// profile to an e-mail address so it can be opened on another device.
 export function ProfileForm({ meta, onDone }: { meta: Meta; onDone: () => void }) {
   const { t, lang } = useI18n();
   const s = getSession();
@@ -285,9 +357,6 @@ export function ProfileForm({ meta, onDone }: { meta: Meta; onDone: () => void }
   const [country, setCountry] = useState(s?.country ?? (lang === 'fr' ? 'FR' : ''));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [recovering, setRecovering] = useState(false);
-  const [code, setCode] = useState('');
-  const [newSecret, setNewSecret] = useState<string | null>(null);
   const countries = useMemo(() => COUNTRIES.map((c) => ({ c, n: countryName(c, lang) })).sort((a, b) => a.n.localeCompare(b.n)), [lang]);
   const clubs = useMemo(() => [...meta.clubs].sort((a, b) => clubName(meta, a.q, lang).localeCompare(clubName(meta, b.q, lang))), [meta, lang]);
 
@@ -296,57 +365,124 @@ export function ProfileForm({ meta, onDone }: { meta: Meta; onDone: () => void }
     try {
       const r = await api.saveProfile({ pseudo, club, country });
       setSession({ id: r.id, secret: r.secret ?? s!.secret, pseudo: r.pseudo, club: r.club, country: r.country });
-      if (r.secret) setNewSecret(r.secret); else onDone();
+      onDone();
     } catch (e) {
       setError(t.errorsMap[(e as ApiError).code] ?? t.errorsMap.server_error);
     } finally { setBusy(false); }
   };
-  const recover = async () => {
-    setBusy(true); setError('');
-    try { setSession(await api.recover(code)); onDone(); } catch (e) { setError(t.errorsMap[(e as ApiError).code] ?? t.errorsMap.server_error); } finally { setBusy(false); }
+
+  return (
+    <>
+      <div className="card profile">
+        <h2>{t.profileTitle}</h2>
+        <p className="hint">{t.profileHint}</p>
+        <label><span>{t.pseudo}</span><input value={pseudo} maxLength={16} onChange={(e) => setPseudo(e.target.value)} autoComplete="nickname" /></label>
+        <label>
+          <span>{t.supportedClub}</span>
+          <select value={club} onChange={(e) => setClub(e.target.value)}>
+            <option value="" disabled>—</option>
+            {clubs.map((c) => <option key={c.q} value={c.q}>{clubName(meta, c.q, lang)}</option>)}
+            <option value="other">{t.otherClub}</option>
+          </select>
+        </label>
+        <label>
+          <span>{t.country}</span>
+          <select value={country} onChange={(e) => setCountry(e.target.value)}>
+            <option value="" disabled>—</option>
+            {countries.map(({ c, n }) => <option key={c} value={c}>{flag(c)} {n}</option>)}
+          </select>
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button className="primary" disabled={busy || !pseudo || !club || !country} onClick={submit}>{t.save}</button>
+      </div>
+      <SignIn meta={meta} onSignedIn={onDone} />
+    </>
+  );
+}
+
+/** Message shown after a sign-in attempt, from the server's answer. */
+export function useSignInResult(onSignedIn: () => void) {
+  const { t } = useI18n();
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const handle = async (p: Promise<SignInResult>) => {
+    setError(''); setNote(t.signingIn);
+    try {
+      const r = await p;
+      if (r.status === 'signed_in') { setSession(r.session); setNote(''); onSignedIn(); }
+      else if (r.status === 'linked') setNote(t.linkedOk);
+      else setNote(t.noProfile);
+    } catch (e) { setNote(''); setError(t.errorsMap[(e as ApiError).code] ?? t.errorsMap.server_error); }
+  };
+  return { note, error, setError, handle };
+}
+
+declare global {
+  interface Window { google?: { accounts: { id: { initialize: (o: { client_id: string; callback: (r: { credential: string }) => void }) => void; renderButton: (el: HTMLElement, o: Record<string, unknown>) => void } } } }
+}
+
+function SignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: () => void }) {
+  const { t, lang } = useI18n();
+  const [account, setAccount] = useState<{ email: string } | null>(null);
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
+  const { note, error, setError, handle } = useSignInResult(onSignedIn);
+  const googleBox = useRef<HTMLDivElement>(null);
+  const googleId = meta.auth?.google;
+
+  useEffect(() => { if (getSession()) api.account().then(setAccount).catch(() => {}); }, [note]);
+  useEffect(() => {
+    if (!googleId || account || !googleBox.current) return;
+    const draw = () => {
+      window.google!.accounts.id.initialize({ client_id: googleId, callback: (r) => handle(api.signInGoogle(r.credential)) });
+      window.google!.accounts.id.renderButton(googleBox.current!, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with', locale: lang });
+    };
+    if (window.google) { draw(); return; }
+    const sc = document.createElement('script');
+    sc.src = 'https://accounts.google.com/gsi/client'; sc.async = true; sc.onload = draw;
+    document.head.appendChild(sc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [googleId, account, lang]);
+
+  const sendLink = async () => {
+    setError('');
+    try { await api.sendEmailLink(email, lang); setSent(true); } catch (e) { setError(t.errorsMap[(e as ApiError).code] ?? t.errorsMap.server_error); }
   };
 
-  if (newSecret) return (
-    <div className="card profile">
-      <h2>{t.recoveryTitle}</h2>
-      <p className="hint">{t.recoveryHint}</p>
-      <code className="recovery">{newSecret}</code>
-      <button className="primary" onClick={onDone}>OK</button>
-    </div>
-  );
-  if (recovering) return (
-    <div className="card profile">
-      <h2>{t.recoveryTitle}</h2>
-      <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="XXXX-XXXX-XXXX-XXXX" autoCapitalize="characters" />
+  const any = !!googleId || !!meta.auth?.email;
+  return (
+    <div className="card profile sign-in">
+      <h2>{t.signInTitle}</h2>
+      {account ? <p className="hint">{t.signedInAs} <b>{account.email}</b></p> : (
+        <>
+          <p className="hint">{any ? t.signInHint : t.signInSoon}</p>
+          {googleId && <div ref={googleBox} className="google-btn" />}
+          {meta.auth?.email && (sent ? <p className="hint">{t.linkSent}</p> : (
+            <form className="email-link" onSubmit={(e) => { e.preventDefault(); sendLink(); }}>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t.emailPlaceholder} autoComplete="email" />
+              <button className="secondary" disabled={!email}>{t.sendLink}</button>
+            </form>
+          ))}
+        </>
+      )}
+      {note && <p className="hint">{note}</p>}
       {error && <p className="error">{error}</p>}
-      <button className="primary" disabled={busy} onClick={recover}>{t.recover}</button>
-      <button className="link" onClick={() => setRecovering(false)}>←</button>
     </div>
   );
+}
+
+/** Landing page of the e-mail sign-in link. */
+export function LoginLink({ token, onDone }: { token: string; onDone: () => void }) {
+  const { t } = useI18n();
+  const { note, error, handle } = useSignInResult(onDone);
+  const started = useRef(false);
+  useEffect(() => { if (!started.current) { started.current = true; handle(api.verifyEmailLink(token)); } }, [token, handle]);
   return (
     <div className="card profile">
-      <h2>{t.profileTitle}</h2>
-      <p className="hint">{t.profileHint}</p>
-      <label><span>{t.pseudo}</span><input value={pseudo} maxLength={16} onChange={(e) => setPseudo(e.target.value)} autoComplete="nickname" /></label>
-      <label>
-        <span>{t.supportedClub}</span>
-        <select value={club} onChange={(e) => setClub(e.target.value)}>
-          <option value="" disabled>—</option>
-          {clubs.map((c) => <option key={c.q} value={c.q}>{clubName(meta, c.q, lang)}</option>)}
-          <option value="other">{t.otherClub}</option>
-        </select>
-      </label>
-      <label>
-        <span>{t.country}</span>
-        <select value={country} onChange={(e) => setCountry(e.target.value)}>
-          <option value="" disabled>—</option>
-          {countries.map(({ c, n }) => <option key={c} value={c}>{flag(c)} {n}</option>)}
-        </select>
-      </label>
+      <h2>{t.signInTitle}</h2>
+      {note && <p className="hint">{note}</p>}
       {error && <p className="error">{error}</p>}
-      <button className="primary" disabled={busy || !pseudo || !club || !country} onClick={submit}>{t.save}</button>
-      {!s && <button className="link" onClick={() => setRecovering(true)}>{t.recoverAction}</button>}
-      {s && <details className="recovery-box"><summary>{t.recoveryTitle}</summary><p className="hint">{t.recoveryHint}</p><code className="recovery">{s.secret}</code></details>}
+      {!note || note !== t.signingIn ? <button className="primary" onClick={onDone}>OK</button> : null}
     </div>
   );
 }
@@ -413,8 +549,9 @@ export function War({ meta }: { meta: Meta }) {
  * with that exact player. Enter alone sends the text (tolerant matching).
  * `choices` lists homonyms to pick from when the server found the typed name ambiguous.
  */
-export function GuessInput({ onGuess, suggestions, choices, onClearChoices, placeholder }: {
+export function GuessInput({ onGuess, suggestions, criterion, choices, onClearChoices, placeholder }: {
   onGuess: (text: string, pick?: string) => void;
+  criterion?: Criterion; // the theme: details tied to it are never shown
   suggestions: boolean;
   choices?: Suggestion[] | null;
   onClearChoices?: () => void;
@@ -431,9 +568,10 @@ export function GuessInput({ onGuess, suggestions, choices, onClearChoices, plac
     const q = text.trim();
     if (!suggestions || q.length < 3) { setList([]); setActive(-1); return; }
     const n = ++seq.current;
-    const h = setTimeout(() => api.suggest(q).then((r) => { if (n === seq.current) { setList(r); setActive(-1); } }).catch(() => {}), 120);
+    const h = setTimeout(() => api.suggest(q, criterion).then((r) => { if (n === seq.current) { setList(r); setActive(-1); } }).catch(() => {}), 120);
     return () => clearTimeout(h);
-  }, [text, suggestions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, suggestions, JSON.stringify(criterion ?? {})]);
 
   const shown = choices?.length ? choices : list;
   const send = (pick?: Suggestion) => {
@@ -469,11 +607,46 @@ export function GuessInput({ onGuess, suggestions, choices, onClearChoices, plac
             <li key={o.q} role="option" aria-selected={i === active} className={i === active ? 'on' : ''}
               onMouseDown={(e) => { e.preventDefault(); send(o); }}>
               <span className="suggest-name">{o.n}</span>
-              <small>{[o.c && flag(o.c), o.p && t.f.positions[o.p], o.y].filter(Boolean).join(' · ')}</small>
+              <small>{[o.club, o.from !== undefined && `${o.from}–${(o.to ?? o.from) + 1}`, o.c && flag(o.c), o.p && t.f.positions[o.p], o.y].filter(Boolean).join(' · ')}</small>
             </li>
           ))}
         </ul>
       )}
     </form>
+  );
+}
+
+// ---------- Badges ----------
+export function Badges({ meta }: { meta: Meta }) {
+  const { t, lang } = useI18n();
+  const [list, setList] = useState<Badge[] | null>(null);
+  useEffect(() => { api.badges().then(setList).catch(() => setList([])); }, []);
+  if (!list?.length) return null;
+  return (
+    <div className="badges">
+      {list.map((b) => (
+        <span key={b.scope} className={`badge-pill top${b.top}`} title={`${b.rank} / ${b.total}`}>
+          🏅 {t.badgeTop(b.top, rankedThemeName(b.scope, meta, lang, t))}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Name of a ranked theme (RANKED_THEMES id): a league, the 5 leagues together, or the World Cup. */
+export function rankedThemeName(id: string, meta: Meta | null, lang: Lang, t: T): string {
+  if (id === 'all') return t.allLeagues;
+  if (id === 'WC') return t.worldCup;
+  const l = meta?.leagues.find((x) => x.id === id);
+  return l ? leagueName(l, lang) : id;
+}
+
+/** Theme picker for best-game boards: big themes only. */
+export function RankedThemePicker({ value, onChange, meta }: { value: string; onChange: (id: string) => void; meta: Meta }) {
+  const { t, lang } = useI18n();
+  return (
+    <div className="tabs ranked-themes">
+      {RANKED_THEMES.map((r) => <button key={r.id} className={value === r.id ? 'on' : ''} onClick={() => onChange(r.id)}>{rankedThemeName(r.id, meta, lang, t)}</button>)}
+    </div>
   );
 }

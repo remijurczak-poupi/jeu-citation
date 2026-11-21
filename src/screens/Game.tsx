@@ -79,7 +79,7 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
           <div className="streak-bar"><span style={{ width: `${Math.max(0, Math.min(100, (remaining / (rules.streakSeconds * 1000)) * 100))}%` }} /></div>
         )}
       </div>
-      <GuessInput onGuess={submit} suggestions={g.mode !== 'hardcore'} choices={choices} onClearChoices={() => setChoices(null)} placeholder={t.typeHere} />
+      <GuessInput onGuess={submit} suggestions={g.mode !== 'hardcore'} criterion={g.criterion} choices={choices} onClearChoices={() => setChoices(null)} placeholder={t.typeHere} />
       <div className="flash-slot">{flash && <div key={flash.key} className={`flash ${flash.kind}`}>{flash.text}</div>}</div>
       {g.chain ? <ChainView links={g.chain} /> : (
         <ol className="found" reversed>
@@ -93,6 +93,8 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
 
 function Result({ g, meta, nav, theme, title }: { g: GameState; meta: Meta; nav: Nav; theme: string; title: string }) {
   const { t } = useI18n();
+  // Best-game boards exist only for the big themes; other themes show the mode's weekly total.
+  const rankedId = g.rankedTheme;
   const [copied, setCopied] = useState(false);
   const share = async () => {
     const url = location.origin + (g.mode === 'daily' ? '/' : '/#/solo');
@@ -125,7 +127,8 @@ function Result({ g, meta, nav, theme, title }: { g: GameState; meta: Meta; nav:
         <h2>{t.leaderboards}</h2>
         {g.mode === 'daily'
           ? <Leaderboard mode="daily" date={g.dailyDate} meta={meta} rarity />
-          : <Leaderboard mode={g.mode} criterion={g.criterion} meta={meta} />}
+          : rankedId ? <Leaderboard mode={g.mode} theme={rankedId} meta={meta} />
+          : <><p className="hint">{t.boardTotal} · {t.boardTotalHint}</p><Leaderboard mode={g.mode} kind="total" meta={meta} /></>}
       </section>}
       {g.chain ? (
         <section className="card">

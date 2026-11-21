@@ -155,7 +155,7 @@ export function RoomScreen({ code, meta, nav }: { code: string; meta: Meta; nav:
             </div>
           )}
           {canType && (
-            <GuessInput onGuess={(text, pick) => send({ t: 'guess', text, ...(pick ? { pick } : {}) })} suggestions choices={choices} onClearChoices={() => setChoices(null)} placeholder={t.typeHere} />
+            <GuessInput onGuess={(text, pick) => send({ t: 'guess', text, ...(pick ? { pick } : {}) })} suggestions criterion={s.criterion} choices={choices} onClearChoices={() => setChoices(null)} placeholder={t.typeHere} />
           )}
         </>
       )}

@@ -1,5 +1,5 @@
 // Solo games: the server holds the state, validates each answer and computes the score.
-import { criterionKey, data, getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, suggestion } from './data';
+import { criterionKey, data, getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, rankedThemeId, describeList } from './data';
 import { chainMatcher, clubLabel, seasonLabel, teammates } from './chain';
 
 let qidIndex: Map<string, number> | null = null;
@@ -71,7 +71,7 @@ export function applyGuess(g: GameRow, text: string, now: number, pick?: string)
   if (pick !== undefined && picked === undefined) return { outcome: { status: 'invalid' }, changed: false };
   const res = picked !== undefined ? matchPick(matcher, picked, cited) : matchGuess(matcher, text, cited, !!rules.suddenDeath);
   if (res.status === 'invalid') return { outcome: res, changed: false };
-  if (res.status === 'ambiguous') return { outcome: { status: 'ambiguous', options: res.options.map(suggestion) }, changed: false };
+  if (res.status === 'ambiguous') return { outcome: { status: 'ambiguous', options: describeList(res.options, criterion) }, changed: false };
   g.guesses++;
   g.last_at = now;
   let outcome: GuessOutcome;
@@ -116,6 +116,7 @@ export function toState(g: GameRow, now: number, extra?: Partial<GameState>): Ga
     errors: g.errors,
     found: found.map((q) => data.players[playerByQ(q) ?? -1]?.n ?? '?'),
     ...(g.mode === 'chain' ? { chain: chainLinks(found) } : {}),
+    ...(g.mode !== 'daily' && rankedThemeId(JSON.parse(g.criterion)) ? { rankedTheme: rankedThemeId(JSON.parse(g.criterion)) } : {}),
     ...(g.end_reason ? { endReason: g.end_reason } : {}),
     ...(g.daily_date ? { dailyDate: g.daily_date } : {}),
     ...(g.board_key.startsWith('archive:') ? { dailyDate: g.board_key.slice(8), archive: true } : {}),

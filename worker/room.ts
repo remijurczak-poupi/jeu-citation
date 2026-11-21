@@ -1,7 +1,7 @@
 // Multiplayer room (one Durable Object per room code). The object is the referee:
 // it owns the clock, the bomb/ball and validates every answer.
 import { DurableObject } from 'cloudflare:workers';
-import { getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, scopeSize, suggestion, type Matcher } from './data';
+import { getMatcher, matchGuess, matchPick, normalizeCriterion, playerIndex, playerName, scopeSize, describeList, type Matcher } from './data';
 import { chainMatcher, chainStart, clubLabel, seasonLabel, teammates } from './chain';
 import { DUEL_DEFAULT_SECONDS, DUEL_SECONDS } from '../shared/types';
 import type { Criterion, RoomClientMsg, RoomGame, RoomPlayer, RoomServerMsg, RoomState } from '../shared/types';
@@ -140,7 +140,7 @@ export class Room extends DurableObject<Env> {
     const picked = typeof pick === 'string' ? playerIndex(pick) : undefined;
     if (pick !== undefined && picked === undefined) return null;
     const res = picked !== undefined ? matchPick(m, picked, this.cited) : matchGuess(m, text, this.cited);
-    if (res.status === 'ambiguous') { send({ t: 'outcome', outcome: { status: 'ambiguous', options: res.options.map(suggestion) } }); return null; }
+    if (res.status === 'ambiguous') { send({ t: 'outcome', outcome: { status: 'ambiguous', options: describeList(res.options, this.s!.criterion) } }); return null; }
     return res;
   }
 
