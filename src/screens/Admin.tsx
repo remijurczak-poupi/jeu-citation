@@ -15,9 +15,12 @@ const STATUS: Record<string, string> = { accepted: 'Acceptée', rejected: 'Rejet
 const readKey = () => { try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; } };
 
 async function admin<R>(method: string, path: string, key: string, body?: unknown): Promise<R> {
-  const res = await fetch('/api/admin' + path, { method, headers: { 'Content-Type': 'application/json', 'x-admin-key': key }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch('/api/admin' + path, { method, headers: { 'Content-Type': 'application/json', 'x-admin-key': encodeURIComponent(key) }, body: body ? JSON.stringify(body) : undefined });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as { error?: string }).error ?? 'server_error');
+  if (!res.ok) {
+    const j = json as { error?: string; got?: number; want?: number };
+    throw Object.assign(new Error(j.error ?? 'server_error'), { got: j.got, want: j.want });
+  }
   return json as R;
 }
 
@@ -31,7 +34,7 @@ export function AdminPage({ meta }: { meta: Meta }) {
     if (!key) return;
     setRows(null); setError('');
     admin<ReportRow[]>('GET', `/reports?status=${tab}`, key).then(setRows).catch((e: Error) => {
-      setError(e.message === 'bad_admin_key' ? 'Mot de passe incorrect.' : e.message === 'admin_not_configured' ? 'Le mot de passe admin n’est pas encore configuré (secret ADMIN_KEY).' : 'Erreur serveur.');
+      setError(e.message === 'bad_admin_key' ? `Mot de passe incorrect (tu as saisi ${(e as Error & { got?: number }).got ?? '?'} caractères, le site en attend ${(e as Error & { want?: number }).want ?? '?'}).` : e.message === 'admin_not_configured' ? 'Le mot de passe admin n’est pas encore configuré (secret ADMIN_KEY).' : 'Erreur serveur.');
       if (e.message === 'bad_admin_key') { setKey(''); try { localStorage.removeItem(KEY); } catch { /* ignore */ } }
     });
   };

@@ -79,10 +79,10 @@ const requireMe = (c: C) => {
   return me;
 };
 class HttpError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public extra?: Record<string, unknown>) { super(message); }
 }
 app.onError((err, c) => {
-  if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+  if (err instanceof HttpError) return c.json({ error: err.message, ...err.extra }, err.status as 400);
   console.error(err);
   return c.json({ error: 'server_error' }, 500);
 });
@@ -532,10 +532,14 @@ async function checkPendingReports(env: Env) {
 // ---------- admin: review reports ----------
 function requireAdmin(c: C) {
   // Trimmed on both sides: a space or line break pasted with the password must not lock Rémi out.
-  const key = c.req.header('x-admin-key')?.trim();
+  // Sent URI-encoded so that accents or symbols survive the HTTP header.
+  let key = c.req.header('x-admin-key') ?? '';
+  try { key = decodeURIComponent(key); } catch { /* sent raw */ }
+  key = key.trim();
   const expected = c.env.ADMIN_KEY?.trim();
   if (!expected) throw new HttpError(404, 'admin_not_configured');
-  if (!key || key !== expected) throw new HttpError(401, 'bad_admin_key');
+  // Lengths only (never the password) help tell a typo from a secret that did not arrive.
+  if (!key || key !== expected) throw new HttpError(401, 'bad_admin_key', { got: key.length, want: expected.length });
 }
 /** Clubs and seasons of a player, to judge a report. */
 const careerText = (p: number) => playerStints(p).map(([, cl, s, e]) => `${data.clubs[cl].n} ${s >= 0 ? s : '?'}–${e >= 0 ? e : data.players[p].x ? 'now' : '?'}`).join(' · ');
