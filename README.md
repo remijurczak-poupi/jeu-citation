@@ -18,6 +18,9 @@ Two steps:
 
 1. `NODE_USE_ENV_PROXY=1 node scripts/build-wiki.mjs` reads English Wikipedia into `scripts/wiki-data.json` (committed): squads of every World Cup since 1998, Euro since 2000 and Copa América since 2001, Champions League clubs per season since 2000-01, Ballon d'Or rankings and league top scorers. The Wikipedia API rate-limits hard, so requests are throttled and cached in `.cache/wiki/`.
 2. `npm run data` queries Wikidata and rebuilds `src/data/football.json` (raw answers are cached in `.cache/`, add `--refresh` to refetch).
+3. `NODE_USE_ENV_PROXY=1 node scripts/build-wiki-careers.mjs` reads the career infobox of every player's English Wikipedia article into `scripts/wiki-careers.json` (committed). Run `npm run data` again afterwards: seasons Wikidata misses at our clubs are added (whole seasons only: "2021–2024" gives 2021-22 to 2023-24), and stints Wikidata leaves open are closed where Wikipedia says the player left.
+
+**Weekly refresh** (`.github/workflows/refresh-data.yml`, Mondays 04:17 UTC, or by hand from the Actions tab): runs the three steps with `--refresh`, refuses the result if more than 3 % of players, clubs or stints disappear or a league season loses clubs (`scripts/check-data.mjs`), runs the tests, commits the data and starts Deploy. A failing Wikipedia step keeps last week's file. GitHub runs scheduled workflows only from the default branch, so the schedule starts once this is on `main`.
 
 - Players: everyone with at least one season since 2000-01 at a club that was then in the Premier League, Ligue 1, La Liga, Serie A or Bundesliga.
 - League membership is **per season**: a club counts for a league only in the seasons it played in it (Wikidata league season items, property P1923). Seasons missing or wrong in Wikidata are filled by hand in `scripts/season-overrides.json`. The build warns if a season does not have 18 or 20 clubs.

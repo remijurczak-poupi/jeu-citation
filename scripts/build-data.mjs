@@ -270,6 +270,12 @@ async function main() {
     byPlayer.set(p, e);
   }
 
+  // Careers from English Wikipedia infoboxes (scripts/build-wiki-careers.mjs) fill Wikidata's gaps.
+  const careersFile = path.join(ROOT, 'scripts/wiki-careers.json');
+  const wikiCareers = fs.existsSync(careersFile) ? JSON.parse(fs.readFileSync(careersFile, 'utf8')).players : {};
+  if (!fs.existsSync(careersFile)) console.warn('WARNING: scripts/wiki-careers.json missing, run scripts/build-wiki-careers.mjs');
+  let wikiAdded = 0, wikiClosed = 0;
+
   // Resolve seasons for each stint, keep players with at least one top-5 season since 2000.
   const kept = [];
   for (const [p, e] of byPlayer) {
@@ -285,6 +291,27 @@ async function main() {
       if (s.e != null && s.s != null && s.e < s.s) s.e = s.s;
       if (s.s == null && s.e != null) s.s = s.e;
     }
+    for (const [club, from, to] of wikiCareers[p] ?? []) {
+      if (!clubSeasons[club]) continue;
+      const end = to ?? CURRENT_SEASON;
+      const same = stints.filter((s) => s.club === club && s.s != null);
+      // Wikidata left the stint open, Wikipedia says the player left: stop it there.
+      if (to != null && !wikiCareers[p].some(([c, f]) => c === club && f > to)) {
+        for (const s of same) if (!s.end && s.s <= to && s.e > to) { s.e = to; wikiClosed++; }
+      }
+      // Seasons Wikidata misses, added as one stint per gap.
+      const covered = (y) => same.some((s) => y >= s.s && y <= s.e);
+      let gap = null;
+      for (let y = from; y <= end + 1; y++) {
+        const missing = y <= end && !covered(y);
+        if (missing && gap == null) gap = y;
+        if (!missing && gap != null) {
+          stints.push({ club, start: null, end: to == null && y - 1 === end ? null : 'wikipedia', apps: null, s: gap, e: y - 1 });
+          wikiAdded++;
+          gap = null;
+        }
+      }
+    }
     let relevant = false;
     for (const s of stints) {
       const cs = clubSeasons[s.club];
@@ -299,6 +326,7 @@ async function main() {
     if (relevant) kept.push({ q: p, birth: e.birth, stints: stints.filter((s) => clubSeasons[s.club]) });
   }
   console.log(`players: ${byPlayer.size} candidates, ${kept.length} kept`);
+  console.log(`Wikipedia careers: ${wikiAdded} missing stints added, ${wikiClosed} open stints closed`);
 
   // 5. International tournaments (Wikidata P1344 "participant in"): World Cup since 1998, Euro since 2000.
   const tournaments = new Map(); // player -> Set(codes like WC2006, EU2008)

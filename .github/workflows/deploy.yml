@@ -1,12 +1,18 @@
 # Deploys the site to Cloudflare Workers (free plan, *.workers.dev address).
 # Needs two repository secrets: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
-# Runs on every push to main or preview, or by hand from the Actions tab.
+# Runs on every push to main or preview, by hand from the Actions tab, or after the weekly data refresh.
 name: Deploy
 
 on:
   push:
     branches: [main, preview]
   workflow_dispatch:
+  # Called by the weekly data refresh, right after it commits new data.
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
 
 concurrency:
   group: deploy
@@ -20,6 +26,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

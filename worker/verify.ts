@@ -3,44 +3,17 @@
 // infobox of their English Wikipedia article and compared with the theme's club, league and seasons.
 import { clubIndex, data, getMatcher, normalizeCriterion } from './data';
 import type { Criterion } from '../shared/types';
+import { infoboxSeasons, parseInfobox } from './infobox';
+
+export { parseInfobox };
 
 const UA = 'name-the-players/0.1 (football trivia game; report checker)';
 export type Verdict = { verdict: 'accept' | 'reject' | 'manual'; reason: string };
-
-/** Senior stints from an infobox: club title and calendar years ("2021–2024", "2024–", "2024"). */
-export function parseInfobox(wikitext: string): { title: string; from: number; to: number | null }[] {
-  const fields = new Map<string, string>();
-  for (const m of wikitext.matchAll(/^\s*\|\s*(years|clubs)(\d+)\s*=\s*(.*)$/gm)) fields.set(m[1] + m[2], m[3]);
-  const out: { title: string; from: number; to: number | null }[] = [];
-  for (let i = 1; i <= 40; i++) {
-    const years = fields.get('years' + i), clubs = fields.get('clubs' + i);
-    if (!years || !clubs) continue;
-    const link = clubs.match(/\[\[([^|\]]+)/);
-    const y = years.replace(/&ndash;|–|—|-/g, '-').match(/(\d{4})\s*(-\s*(\d{4})?)?/);
-    if (!link || !y) continue;
-    const from = +y[1];
-    const to = y[3] ? +y[3] : y[2] ? null : from; // "2024–" = still there; "2024" = within that year
-    out.push({ title: link[1].trim(), from, to });
-  }
-  return out;
-}
 
 async function getJson(url: string): Promise<any> {
   const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
-}
-
-/** Seasons (start years) a stint surely covers, and the ones it may cover (transfer month unknown). */
-function seasons(from: number, to: number | null) {
-  const end = to ?? data.currentSeason + 1;
-  const sure: number[] = [], maybe: number[] = [];
-  for (let s = from - 1; s <= end; s++) {
-    if (s >= from && s + 1 <= end) sure.push(s); // whole season inside the years given
-    else if (s + 1 >= from && s <= end) maybe.push(s);
-  }
-  if (!sure.length && to === from) maybe.push(from - 1, from);
-  return { sure, maybe };
 }
 
 const CAREER_KEYS: (keyof Criterion)[] = ['league', 'club', 'club2', 'from', 'to'];
@@ -75,7 +48,7 @@ export async function verifyReport(playerIdx: number, criterion: Criterion): Pro
   const from = c.from ?? data.firstSeason, to = c.to ?? data.currentSeason;
   const club = c.club !== undefined ? clubIndex(c.club) : undefined;
   const club2 = c.club2 !== undefined ? clubIndex(c.club2) : undefined;
-  const mine = stints.map((s) => ({ club: resolve(s.title) !== undefined ? clubIndex(resolve(s.title)!) : undefined, ...seasons(s.from, s.to) }));
+  const mine = stints.map((s) => ({ club: resolve(s.title) !== undefined ? clubIndex(resolve(s.title)!) : undefined, ...infoboxSeasons(s.from, s.to, data.currentSeason) }));
   if (club2 !== undefined && !mine.some((s) => s.club === club2)) return { verdict: 'reject', reason: 'Wikipedia: never played for the second club' };
   const fits = (s: typeof mine[number], y: number) =>
     s.club !== undefined && y >= from && y <= to && (club === undefined || s.club === club) && (!c.league || (data.clubs[s.club].l[c.league] ?? []).includes(y));

@@ -1,0 +1,81 @@
+# Rebuilds the game data from Wikidata and English Wikipedia every week (careers missing from
+# Wikidata are filled from the Wikipedia infoboxes), checks it,
+# commits it to the branch it ran on and redeploys the site.
+# GitHub only runs scheduled workflows from the default branch (main).
+# It can also be started by hand from the Actions tab, on any branch.
+name: Refresh data
+
+on:
+  schedule:
+    - cron: '17 4 * * 1' # Mondays, 04:17 UTC
+  workflow_dispatch:
+  # Also runs when the refresh itself changes, so that a new version is tried right away.
+  push:
+    branches: [main, preview]
+    paths: [scripts/build-wiki-careers.mjs, .github/workflows/refresh-data.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Keep the current data for comparison
+        run: cp src/data/football.json "$RUNNER_TEMP/football-before.json"
+
+      - name: Wikipedia extras (tournaments, Ballon d'Or, top scorers)
+        run: |
+          # Optional: if Wikipedia fails, keep last week's extras.
+          node scripts/build-wiki.mjs --refresh || { echo "::warning::Wikipedia refresh failed, keeping the previous extras"; git checkout scripts/wiki-data.json; }
+
+      - name: Players and careers from Wikidata
+        run: node scripts/build-data.mjs --refresh
+
+      - name: Careers from Wikipedia infoboxes, to fill Wikidata's gaps
+        run: |
+          # Reads every player's English article (about 600 requests). If Wikipedia fails, keep last week's careers.
+          if node scripts/build-wiki-careers.mjs --refresh; then
+            node scripts/build-data.mjs # second pass from the cached Wikidata answers, now with the careers merged
+          else
+            echo "::warning::Wikipedia careers refresh failed, keeping the previous ones"; git checkout scripts/wiki-careers.json 2>/dev/null || true
+          fi
+
+      - name: Check nothing important disappeared
+        run: node scripts/check-data.mjs "$RUNNER_TEMP/football-before.json" src/data/football.json
+
+      - name: Tests
+        run: npm test && npm run typecheck
+
+      - name: Commit
+        id: commit
+        run: |
+          git add src/data/football.json scripts/wiki-data.json scripts/wiki-careers.json
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Weekly data refresh ($(date -u +%Y-%m-%d))"
+          git push origin HEAD:${{ github.ref_name }}
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # A push made with the workflow token does not start Deploy by itself, so call it here.
+  deploy:
+    needs: refresh
+    if: needs.refresh.outputs.sha != ''
+    uses: ./.github/workflows/deploy.yml
+    with:
+      ref: ${{ needs.refresh.outputs.sha }}
+    secrets: inherit
