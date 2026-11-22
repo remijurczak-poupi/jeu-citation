@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
-    timeout-minutes: 60
+    timeout-minutes: 150 # the first run reads every Wikipedia article (about 1 h); later runs under half of them
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -48,7 +48,7 @@ jobs:
 
       - name: Careers from Wikipedia infoboxes, to fill Wikidata's gaps
         run: |
-          # Reads every player's English article (about 600 requests). If Wikipedia fails, keep last week's careers.
+          # Reads the English articles of active players and a quarter of the others, about 10 requests a minute. If Wikipedia fails, keep last week's careers.
           if node scripts/build-wiki-careers.mjs --refresh; then
             node scripts/build-data.mjs # second pass from the cached Wikidata answers, now with the careers merged
           else

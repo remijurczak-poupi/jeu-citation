@@ -2,7 +2,9 @@
 // saved to scripts/wiki-careers.json. build-data.mjs adds the seasons Wikidata is missing
 // (e.g. a recent transfer nobody entered in Wikidata yet) and closes stints Wikidata leaves open.
 // Only whole seasons are kept: "2021–2024" at a club gives 2021-22, 2022-23 and 2023-24.
-// Usage: NODE_USE_ENV_PROXY=1 node scripts/build-wiki-careers.mjs [--refresh]
+// Wikipedia allows about 10 such requests a minute, so each run re-reads the active players and a
+// quarter of the retired ones (all of them on the first run, or with --all) and keeps the rest.
+// Usage: NODE_USE_ENV_PROXY=1 node scripts/build-wiki-careers.mjs [--refresh] [--all]
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -13,6 +15,8 @@ const CACHE = path.join(ROOT, '.cache/wiki-careers');
 const OUT = path.join(ROOT, 'scripts/wiki-careers.json');
 const DATA = path.join(ROOT, 'src/data/football.json');
 const REFRESH = process.argv.includes('--refresh');
+const ALL = process.argv.includes('--all');
+const GAP_MS = 6500; // stay under Wikipedia's limit instead of bouncing on 429s
 const API = 'https://en.wikipedia.org/w/api.php';
 const SPARQL = 'https://query.wikidata.org/sparql';
 const UA = 'name-the-players-builder/0.1 (football trivia game)';
@@ -50,7 +54,7 @@ async function http(url, init) {
 
 const wiki = (params) =>
   cached(JSON.stringify(params), async () => {
-    await sleep(250); // be gentle with the API
+    await sleep(GAP_MS);
     return http(API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -69,9 +73,35 @@ const sparql = (query) =>
 
 const data = JSON.parse(fs.readFileSync(DATA, 'utf8'));
 const ourClubs = new Set(data.clubs.map((c) => c.q));
-const qids = data.players.map((p) => p.q).filter((q) => /^Q\d+$/.test(q));
+const previous = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')).players ?? {} : {};
+const firstRun = !Object.keys(previous).length;
+const week = Math.floor(Date.now() / (7 * 864e5));
+const hash = (q) => [...q].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+const due = (p) => ALL || firstRun || p.x || hash(p.q) % 4 === week % 4;
+const qids = data.players.filter((p) => /^Q\d+$/.test(p.q) && due(p)).map((p) => p.q);
+console.log(`${qids.length} of ${data.players.length} players to read this time`);
 
-// 1. English Wikipedia article of every player.
+// 1. Article titles of our clubs and every redirect to them ("Marseille", "OM"…), to read the infobox links.
+const clubOf = new Map();
+const norm = (t) => { const x = t.replace(/_/g, ' ').replace(/#.*$/, '').trim(); return x.charAt(0).toUpperCase() + x.slice(1); };
+const clubTitles = await sparql(`SELECT ?c ?t WHERE {
+  VALUES ?c { ${[...ourClubs].map((q) => 'wd:' + q).join(' ')} }
+  ?a schema:about ?c ; schema:isPartOf <https://en.wikipedia.org/> ; schema:name ?t .
+}`);
+const clubByTitle = new Map(clubTitles.results.bindings.map((b) => [b.t.value, b.c.value.split('/').pop()]));
+for (const [t, q] of clubByTitle) clubOf.set(norm(t), q);
+for (const batch of chunk([...clubByTitle.keys()], 50)) {
+  let cont = {};
+  for (;;) {
+    const json = await wiki({ action: 'query', prop: 'redirects', rdlimit: 'max', rdnamespace: '0', titles: batch.join('|'), ...cont });
+    for (const page of json.query?.pages ?? []) for (const r of page.redirects ?? []) if (clubByTitle.has(page.title)) clubOf.set(norm(r.title), clubByTitle.get(page.title));
+    if (!json.continue) break;
+    cont = json.continue;
+  }
+}
+console.log(`${clubByTitle.size} club articles, ${clubOf.size} titles and redirects`);
+
+// 2. English Wikipedia article of every player.
 const titleOf = new Map();
 for (const [i, batch] of chunk(qids, 400).entries()) {
   const json = await sparql(`SELECT ?p ?t WHERE {
@@ -83,7 +113,7 @@ for (const [i, batch] of chunk(qids, 400).entries()) {
 }
 console.log(`${titleOf.size} of ${qids.length} players have an English article`);
 
-// 2. Infoboxes, 50 articles per request.
+// 3. Infoboxes, 50 articles per request.
 const careers = new Map(); // player -> parsed stints
 const qidByTitle = new Map([...titleOf].map(([q, t]) => [t, q]));
 const batches = chunk([...titleOf.values()], 50);
@@ -101,30 +131,14 @@ for (const [i, batch] of batches.entries()) {
   if (i % 50 === 0) console.log(`infoboxes ${i + 1}/${batches.length}: ${careers.size} careers`);
 }
 
-// 3. Club links (often redirects or short names) → Wikidata ids.
-const linkTitles = [...new Set([...careers.values()].flatMap((s) => s.map((x) => x.title)))];
-const clubOf = new Map();
-for (const batch of chunk(linkTitles, 50)) {
-  const json = await wiki({ action: 'query', prop: 'pageprops', ppprop: 'wikibase_item', redirects: '1', titles: batch.join('|') });
-  const alias = new Map();
-  for (const r of [...(json.query?.normalized ?? []), ...(json.query?.redirects ?? [])]) alias.set(r.from, r.to);
-  const qidOf = new Map();
-  for (const p of json.query?.pages ?? []) if (p.pageprops?.wikibase_item) qidOf.set(p.title, p.pageprops.wikibase_item);
-  for (const t of batch) {
-    let x = t;
-    for (let k = 0; k < 3 && alias.has(x); k++) x = alias.get(x);
-    if (qidOf.has(x)) clubOf.set(t, qidOf.get(x));
-  }
-}
-console.log(`${clubOf.size} of ${linkTitles.length} club links resolved`);
-
 // 4. Keep our clubs only, with the seasons each stint surely covers. null end = still at the club.
-const out = {};
+// Players not read this time keep last run's careers.
+const out = Object.fromEntries(Object.entries(previous).filter(([q]) => !careers.has(q) && !titleOf.has(q)));
 let n = 0;
 for (const [q, stints] of careers) {
   const rows = [];
   for (const s of stints) {
-    const club = clubOf.get(s.title);
+    const club = clubOf.get(norm(s.title));
     if (!club || !ourClubs.has(club)) continue;
     const { sure } = infoboxSeasons(s.from, s.to, data.currentSeason);
     if (!sure.length) continue;
@@ -139,4 +153,4 @@ const result = {
   players: out,
 };
 fs.writeFileSync(OUT, JSON.stringify(result));
-console.log(`wrote ${OUT}: ${Object.keys(out).length} players, ${n} stints at our clubs`);
+console.log(`wrote ${OUT}: ${Object.keys(out).length} players (${careers.size} read now), ${n} new stints at our clubs`);
