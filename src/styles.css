@@ -392,3 +392,4 @@ button.report.inline { border: 1px solid var(--line); text-decoration: none; bor
 .report-item .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .report-player small { color: var(--muted); display: block; }
 .suggest.static { position: static; margin-top: 4px; }
+.report.rejected { color: var(--muted); font-size: 13px; text-align: center; }

@@ -7,6 +7,8 @@ import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type G
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
+import { verifyReport, type Verdict } from './verify';
+import { compact } from './normalize';
 import type { Challenge, DailyStreak, GameRecap, Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
 import { MODE_RULES, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
 
@@ -463,11 +465,69 @@ app.post('/api/reports', async (c) => {
     const recent = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM reports WHERE device_id = ? AND created_at > ?').bind(me.id, Date.now() - 3600_000).first<{ n: number }>();
     if ((recent?.n ?? 0) >= 30) throw new HttpError(429, 'too_many_reports');
   }
-  await c.env.DB.prepare('INSERT INTO reports (device_id, game_id, text, recognised, criterion, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  const ins = await c.env.DB.prepare('INSERT INTO reports (device_id, game_id, text, recognised, criterion, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .bind(me?.id ?? null, typeof b.gameId === 'string' ? b.gameId.slice(0, 40) : null, b.text.trim(), typeof b.recognised === 'string' ? b.recognised.slice(0, 120) : null,
       JSON.stringify(criterion), typeof b.note === 'string' ? b.note.slice(0, 300) : null, Date.now()).run();
-  return c.json({ ok: true });
+  // Checked right away against Wikipedia; a slow answer is finished in the background (and retried by the cron).
+  const check = checkReport(c.env, ins.meta.last_row_id);
+  c.executionCtx.waitUntil(check.catch(() => {}));
+  const verdict = await Promise.race([check.catch(() => 'manual' as const), new Promise<'pending'>((r) => setTimeout(() => r('pending'), 6000))]);
+  return c.json({ ok: true, verdict });
 });
+
+/** Player named in a report: the one the game recognised, else the exact name typed. */
+function reportedPlayer(text: string, recognised: string | null): number | undefined {
+  for (const name of [recognised, text]) {
+    if (!name) continue;
+    const p = suggest(name, 5).find((x) => compact(data.players[x].n) === compact(name));
+    if (p !== undefined) return p;
+  }
+  return undefined;
+}
+
+/** Makes a player count for the report's theme, and credits the answer in the reported game. */
+async function acceptReport(env: Env, id: number, playerQ: string, status: 'accepted' | 'auto_accepted', resolution: string) {
+  const r = await env.DB.prepare('SELECT criterion, game_id FROM reports WHERE id = ?').bind(id).first<{ criterion: string; game_id: string | null }>();
+  if (!r) return;
+  await env.DB.batch([
+    env.DB.prepare('INSERT OR IGNORE INTO accepted_answers (theme_key, player, report_id, created_at) VALUES (?, ?, ?, ?)').bind(criterionKey(JSON.parse(r.criterion)), playerQ, id, Date.now()),
+    env.DB.prepare('UPDATE reports SET status = ?, resolution = ?, checked_at = ? WHERE id = ?').bind(status, resolution, Date.now(), id),
+  ]);
+  if (!r.game_id) return;
+  const g = await env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(r.game_id).first<GameRow>();
+  if (!g || criterionKey(JSON.parse(g.criterion)) !== criterionKey(JSON.parse(r.criterion))) return;
+  const found: string[] = JSON.parse(g.found);
+  if (found.includes(playerQ) || g.mode === 'chain') return;
+  found.push(playerQ);
+  const res = await env.DB.prepare('UPDATE games SET found = ?, count = count + 1, version = version + 1 WHERE id = ? AND version = ?').bind(JSON.stringify(found), g.id, g.version).run();
+  if (res.meta.changes && g.status === 'finished') {
+    await env.DB.batch([
+      env.DB.prepare('UPDATE scores SET score = score + 1, count = count + 1 WHERE game_id = ?').bind(g.id),
+      env.DB.prepare('INSERT INTO citations (theme_key, player, n) VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET n = n + 1').bind(criterionKey(JSON.parse(g.criterion)), playerQ),
+    ]);
+  }
+}
+
+/** Automatic check of one report: accepted or rejected when Wikipedia is clear, left open for a human otherwise. */
+async function checkReport(env: Env, id: number): Promise<'accept' | 'reject' | 'manual'> {
+  const r = await env.DB.prepare("SELECT text, recognised, criterion FROM reports WHERE id = ? AND status = 'open'").bind(id).first<{ text: string; recognised: string | null; criterion: string }>();
+  if (!r) return 'manual';
+  const p = reportedPlayer(r.text, r.recognised);
+  const criterion = JSON.parse(r.criterion) as Criterion;
+  let v: Verdict;
+  if (p === undefined) v = { verdict: 'manual', reason: 'player not recognised' };
+  else if (getMatcher(criterion).scope.players.has(p)) v = { verdict: 'accept', reason: 'already in the theme with our data' };
+  else v = await verifyReport(p, criterion).catch((e: Error) => ({ verdict: 'manual' as const, reason: 'check failed: ' + e.message }));
+  if (v.verdict === 'accept') await acceptReport(env, id, data.players[p!].q, 'auto_accepted', v.reason);
+  else await env.DB.prepare('UPDATE reports SET status = ?, resolution = ?, checked_at = ? WHERE id = ?').bind(v.verdict === 'reject' ? 'auto_rejected' : 'open', v.reason, Date.now(), id).run();
+  return v.verdict;
+}
+
+/** Cron: reports still open and not checked in the last day (Wikipedia down, slow answer…). */
+async function checkPendingReports(env: Env) {
+  const rows = await env.DB.prepare("SELECT id FROM reports WHERE status = 'open' AND (checked_at IS NULL OR checked_at < ?) ORDER BY created_at LIMIT 20").bind(Date.now() - 86400_000).all<{ id: number }>();
+  for (const r of rows.results) await checkReport(env, r.id).catch(() => {});
+}
 
 // ---------- admin: review reports ----------
 function requireAdmin(c: C) {
@@ -482,10 +542,10 @@ app.get('/api/admin/reports', async (c) => {
   requireAdmin(c);
   const status = c.req.query('status') === 'closed' ? 'closed' : 'open';
   const rows = await c.env.DB.prepare(
-    `SELECT r.id, r.text, r.recognised, r.criterion, r.note, r.created_at, r.status, r.game_id, p.pseudo
+    `SELECT r.id, r.text, r.recognised, r.criterion, r.note, r.created_at, r.status, r.game_id, r.resolution, p.pseudo
      FROM reports r LEFT JOIN profiles p ON p.id = r.device_id
      WHERE ${status === 'open' ? "r.status = 'open'" : "r.status <> 'open'"} ORDER BY r.created_at DESC LIMIT 200`,
-  ).all<{ id: number; text: string; recognised: string | null; criterion: string; note: string | null; created_at: number; status: string; game_id: string | null; pseudo: string | null }>();
+  ).all<{ id: number; text: string; recognised: string | null; criterion: string; note: string | null; created_at: number; status: string; game_id: string | null; pseudo: string | null; resolution: string | null }>();
   return c.json(rows.results.map((r) => {
     const criterion = JSON.parse(r.criterion) as Criterion;
     const p = r.recognised ? suggest(r.recognised, 1)[0] : undefined;
@@ -512,10 +572,7 @@ app.post('/api/admin/reports/:id', async (c) => {
   if (!r) throw new HttpError(404, 'report_not_found');
   if (action === 'accept') {
     if (typeof player !== 'string' || playerIndex(player) === undefined) throw new HttpError(400, 'bad_player');
-    await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO accepted_answers (theme_key, player, report_id, created_at) VALUES (?, ?, ?, ?)').bind(criterionKey(JSON.parse(r.criterion)), player, id, Date.now()),
-      c.env.DB.prepare("UPDATE reports SET status = 'accepted' WHERE id = ?").bind(id),
-    ]);
+    await acceptReport(c.env, id, player, 'accepted', 'accepted by hand');
   } else if (action === 'reject') {
     await c.env.DB.prepare("UPDATE reports SET status = 'rejected' WHERE id = ?").bind(id).run();
   } else if (action === 'reopen') {
@@ -767,4 +824,8 @@ app.get('/api/rooms/:code', async (c) => {
 
 app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404));
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Every 30 minutes: finish the automatic checks of reports left open.
+  scheduled: async (_e: ScheduledController, env: Env, ctx: ExecutionContext) => { ctx.waitUntil(checkPendingReports(env)); },
+} satisfies ExportedHandler<Env>;

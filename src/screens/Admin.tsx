@@ -7,10 +7,11 @@ import { themeLabel } from '../format';
 import type { Criterion, Meta, Suggestion } from '../../shared/types';
 
 interface ReportRow {
-  id: number; text: string; recognised: string | null; criterion: Criterion; note: string | null; created_at: number; status: string; game_id: string | null; pseudo: string | null;
+  id: number; text: string; recognised: string | null; criterion: Criterion; note: string | null; created_at: number; status: string; game_id: string | null; pseudo: string | null; resolution: string | null;
   player: { q: string; n: string; career: string; inTheme: boolean } | null;
 }
 const KEY = 'ntp-admin-key';
+const STATUS: Record<string, string> = { accepted: 'Acceptée', rejected: 'Rejetée', auto_accepted: 'Acceptée automatiquement', auto_rejected: 'Rejetée automatiquement' };
 const readKey = () => { try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; } };
 
 async function admin<R>(method: string, path: string, key: string, body?: unknown): Promise<R> {
@@ -39,7 +40,7 @@ export function AdminPage({ meta }: { meta: Meta }) {
   if (!key) return (
     <div className="card admin">
       <h2>Administration</h2>
-      <p className="hint">Entre le mot de passe admin (le secret ADMIN_KEY). Il reste dans ce navigateur.</p>
+      <p className="hint">Les signalements sont vérifiés automatiquement sur Wikipédia ; seuls les cas douteux restent ici. Entre le mot de passe admin (le secret ADMIN_KEY). Il reste dans ce navigateur.</p>
       <form onSubmit={(e) => { e.preventDefault(); try { localStorage.setItem(KEY, draft); } catch { /* ignore */ } setKey(draft); }}>
         <input type="password" value={draft} onChange={(e) => setDraft(e.target.value)} autoComplete="current-password" />
         <button className="primary" disabled={!draft}>Entrer</button>
@@ -89,6 +90,7 @@ function ReportItem({ r, meta, adminKey, onDone }: { r: ReportRow; meta: Meta; a
         <p className="hint">Reconnu comme <b>{r.player.n}</b> ({r.player.career || 'aucun club connu'}) · {r.player.inTheme ? 'il est déjà dans le thème aujourd’hui' : 'hors thème d’après nos données'}</p>
       ) : <p className="hint">Joueur non reconnu par le jeu.</p>}
       {r.note && <p className="hint">Note : {r.note}</p>}
+      {r.resolution && <p className="hint">Vérification automatique : {r.resolution}</p>}
       {r.status === 'open' ? (
         <>
           {player && <p className="report-player">Joueur à accepter : <b>{player.n}</b> <small>{player.career}</small></p>}
@@ -100,7 +102,7 @@ function ReportItem({ r, meta, adminKey, onDone }: { r: ReportRow; meta: Meta; a
           </div>
         </>
       ) : (
-        <div className="row"><span className={`pill ${r.status === 'accepted' ? 'easy' : 'hard'}`}>{r.status === 'accepted' ? 'Acceptée' : 'Rejetée'}</span><button className="link" disabled={busy} onClick={() => act('reopen')}>Rouvrir</button></div>
+        <div className="row"><span className={`pill ${r.status.endsWith('accepted') ? 'easy' : 'hard'}`}>{STATUS[r.status] ?? r.status}</span><button className="link" disabled={busy} onClick={() => act('reopen')}>Rouvrir</button></div>
       )}
     </li>
   );

@@ -66,7 +66,7 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
   const theme = themeLabel(g.criterion, meta, lang, t);
   const title = g.mode === 'daily' ? t.dailyTitle : t.modes[g.mode];
 
-  if (g.status === 'finished') return <Result g={g} meta={meta} nav={nav} theme={theme} title={title} refused={refused} />;
+  if (g.status === 'finished') return <Result g={g} meta={meta} nav={nav} theme={theme} title={title} refused={refused} onRefresh={() => api.game(id).then(accept)} />;
 
   const rules = MODE_RULES[g.mode];
   const low = remaining !== null && remaining < (rules.streakSeconds ? 5000 : 10000);
@@ -88,7 +88,7 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
       <GuessInput onGuess={submit} suggestions={g.mode !== 'hardcore'} criterion={g.criterion} choices={choices} onClearChoices={() => setChoices(null)} placeholder={t.typeHere} />
       <div className="flash-slot">
         {flash && <div key={flash.key} className={`flash ${flash.kind}`}>{flash.text}</div>}
-        {flash?.kind === 'wrong' && refused.length > 0 && <ReportButton key={refused.length} gameId={g.id} criterion={g.criterion} item={refused[refused.length - 1]} />}
+        {flash?.kind === 'wrong' && refused.length > 0 && <ReportButton key={refused.length} gameId={g.id} criterion={g.criterion} item={refused[refused.length - 1]} onAccepted={() => api.game(id).then(accept)} />}
       </div>
       {g.chain ? <ChainView links={g.chain} /> : (
         <ol className="found" reversed>
@@ -101,15 +101,22 @@ export function GameScreen({ id, meta, nav }: { id: string; meta: Meta; nav: Nav
 }
 
 /** "My answer was right": sends the refused answer for a manual check. */
-function ReportButton({ gameId, criterion, item, inline }: { gameId: string; criterion: Criterion; item: Refused; inline?: boolean }) {
+function ReportButton({ gameId, criterion, item, inline, onAccepted }: { gameId: string; criterion: Criterion; item: Refused; inline?: boolean; onAccepted?: () => void }) {
   const { t } = useI18n();
-  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
+  const [state, setState] = useState<'idle' | 'busy' | 'accept' | 'reject' | 'done'>('idle');
   const send = async () => {
     setState('busy');
-    try { await api.report({ gameId, text: item.text, recognised: item.recognised, criterion }); setState('done'); } catch { setState('idle'); }
+    try {
+      const r = await api.report({ gameId, text: item.text, recognised: item.recognised, criterion });
+      setState(r.verdict === 'accept' ? 'accept' : r.verdict === 'reject' ? 'reject' : 'done');
+      if (r.verdict === 'accept') onAccepted?.();
+    } catch { setState('idle'); }
   };
+  if (state === 'busy') return <span className="report done">{t.reportChecking}</span>;
+  if (state === 'accept') return <span className="report done">✓ {t.reportAccepted}</span>;
+  if (state === 'reject') return <span className="report rejected">{t.reportRejected}</span>;
   if (state === 'done') return <span className="report done">✓ {t.reported}</span>;
-  return <button className={`report ${inline ? 'inline' : ''}`} disabled={state === 'busy'} onClick={send}>{inline ? t.report : t.reportAsk(item.text)}</button>;
+  return <button className={`report ${inline ? 'inline' : ''}`} onClick={send}>{inline ? t.report : t.reportAsk(item.text)}</button>;
 }
 
 const SQUARE = ['', '🟩', '🟨', '🟪'];
@@ -132,7 +139,7 @@ async function shareText(text: string, url?: string) {
   return true;
 }
 
-function Result({ g, meta, nav, theme, title, refused }: { g: GameState; meta: Meta; nav: Nav; theme: string; title: string; refused: Refused[] }) {
+function Result({ g, meta, nav, theme, title, refused, onRefresh }: { g: GameState; meta: Meta; nav: Nav; theme: string; title: string; refused: Refused[]; onRefresh: () => void }) {
   const { t, lang } = useI18n();
   // Best-game boards exist only for the big themes; other themes show the mode's weekly total.
   const rankedId = g.rankedTheme;
@@ -196,7 +203,7 @@ function Result({ g, meta, nav, theme, title, refused }: { g: GameState; meta: M
         <section className="card">
           <h2>{t.refusedTitle}</h2>
           <p className="hint">{t.refusedHint}</p>
-          <ul className="refused">{refused.map((r, i) => <li key={i}><span>{r.text}{r.recognised ? <small> → {r.recognised}</small> : null}</span><ReportButton gameId={g.id} criterion={g.criterion} item={r} inline /></li>)}</ul>
+          <ul className="refused">{refused.map((r, i) => <li key={i}><span>{r.text}{r.recognised ? <small> → {r.recognised}</small> : null}</span><ReportButton gameId={g.id} criterion={g.criterion} item={r} inline onAccepted={onRefresh} /></li>)}</ul>
         </section>
       )}
       {!g.archive && <section className="card">

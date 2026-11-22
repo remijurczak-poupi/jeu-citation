@@ -54,7 +54,7 @@ export const api = {
   recap: (id: string) => call<GameRecap>('GET', `/games/${id}/recap`),
   createChallenge: (gameId: string) => call<{ code: string }>('POST', '/challenges', { gameId }),
   challenge: (code: string) => call<Challenge>('GET', `/challenges/${code}`),
-  report: (r: { gameId?: string; text: string; recognised?: string; criterion: Criterion; note?: string }) => call<{ ok: true }>('POST', '/reports', r),
+  report: (r: { gameId?: string; text: string; recognised?: string; criterion: Criterion; note?: string }) => call<{ ok: true; verdict: 'accept' | 'reject' | 'manual' | 'pending' }>('POST', '/reports', r),
   game: (id: string) => call<GameState>('GET', `/games/${id}`),
   guess: (id: string, text: string, pick?: string) => call<{ outcome: GuessOutcome; state: GameState }>('POST', `/games/${id}/guess`, { text, ...(pick ? { pick } : {}) }),
   suggest: (q: string, criterion?: Criterion) => call<Suggestion[]>('GET', `/suggest?q=${encodeURIComponent(q)}${criterion ? '&c=' + encodeURIComponent(JSON.stringify(criterion)) : ''}`),

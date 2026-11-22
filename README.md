@@ -103,7 +103,12 @@ The free plan allows 100,000 requests a day and 10 ms of CPU per request. Name m
 
 ## Reports of refused answers
 
-Players can report an answer that should have counted. Review them on the admin page
+Players can report an answer that should have counted. Each report is checked at once
+against the player's senior career in their English Wikipedia infobox (worker/verify.ts):
+accepted when a club and season of the theme is confirmed (the answer then counts for that
+theme and the reported game gets its point), rejected when nothing matches, left open when
+unsure (transfer month, other filters). A cron every 30 minutes retries open reports.
+Review what is left on the admin page
 `/#/admin` (password: the `ADMIN_KEY` repository secret, pushed to the Worker on deploy).
 Accepting a report makes that player count for that exact theme right away (table
 `accepted_answers`); fix the data itself when the gap is wider. Or with the command line:
