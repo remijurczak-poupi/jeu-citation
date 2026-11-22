@@ -41,7 +41,7 @@ export function AdminPage({ meta }: { meta: Meta }) {
     <div className="card admin">
       <h2>Administration</h2>
       <p className="hint">Les signalements sont vérifiés automatiquement sur Wikipédia ; seuls les cas douteux restent ici. Entre le mot de passe admin (le secret ADMIN_KEY). Il reste dans ce navigateur.</p>
-      <form onSubmit={(e) => { e.preventDefault(); try { localStorage.setItem(KEY, draft); } catch { /* ignore */ } setKey(draft); }}>
+      <form onSubmit={(e) => { e.preventDefault(); try { localStorage.setItem(KEY, draft.trim()); } catch { /* ignore */ } setKey(draft.trim()); }}>
         <input type="password" value={draft} onChange={(e) => setDraft(e.target.value)} autoComplete="current-password" />
         <button className="primary" disabled={!draft}>Entrer</button>
       </form>

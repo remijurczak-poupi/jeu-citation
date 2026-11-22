@@ -531,9 +531,11 @@ async function checkPendingReports(env: Env) {
 
 // ---------- admin: review reports ----------
 function requireAdmin(c: C) {
-  const key = c.req.header('x-admin-key');
-  if (!c.env.ADMIN_KEY) throw new HttpError(404, 'admin_not_configured');
-  if (!key || key !== c.env.ADMIN_KEY) throw new HttpError(401, 'bad_admin_key');
+  // Trimmed on both sides: a space or line break pasted with the password must not lock Rémi out.
+  const key = c.req.header('x-admin-key')?.trim();
+  const expected = c.env.ADMIN_KEY?.trim();
+  if (!expected) throw new HttpError(404, 'admin_not_configured');
+  if (!key || key !== expected) throw new HttpError(401, 'bad_admin_key');
 }
 /** Clubs and seasons of a player, to judge a report. */
 const careerText = (p: number) => playerStints(p).map(([, cl, s, e]) => `${data.clubs[cl].n} ${s >= 0 ? s : '?'}–${e >= 0 ? e : data.players[p].x ? 'now' : '?'}`).join(' · ');

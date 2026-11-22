@@ -55,9 +55,9 @@ jobs:
       - name: E-mail key (optional)
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: if [ -n "$RESEND_API_KEY" ]; then echo "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY; fi
+        run: if [ -n "$RESEND_API_KEY" ]; then printf %s "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY; fi
 
       - name: Admin password (optional)
         env:
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
-        run: if [ -n "$ADMIN_KEY" ]; then echo "$ADMIN_KEY" | npx wrangler secret put ADMIN_KEY; fi
+        run: if [ -n "$ADMIN_KEY" ]; then printf %s "$ADMIN_KEY" | npx wrangler secret put ADMIN_KEY; fi
