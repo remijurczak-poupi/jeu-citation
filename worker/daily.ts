@@ -29,9 +29,17 @@ function topSeasons(clubIdx: number): number {
   return new Set(Object.values(data.clubs[clubIdx].l).flat()).size;
 }
 
-export function dailyCriterion(date: string): { criterion: Criterion; difficulty: 'easy' | 'hard' } {
-  const n = dailyNumber(date);
-  const difficulty = n % 2 === 1 ? 'easy' : 'hard';
+export type DailyPick = { criterion: Criterion; difficulty: 'easy' | 'hard' };
+
+export const dailyDifficulty = (date: string): 'easy' | 'hard' => (dailyNumber(date) % 2 === 1 ? 'easy' : 'hard');
+
+/**
+ * Draws a day's theme from the current data. The result depends on the data (club sizes,
+ * seasons…), so it changes after a data refresh: never call it directly to serve a day,
+ * go through dailyChallenges(), which freezes the draw the first time a day is served.
+ */
+export function drawDailyCriterion(date: string): DailyPick {
+  const difficulty = dailyDifficulty(date);
   const rand = rng('daily:' + date);
   const pick = <T,>(arr: T[]) => arr[Math.floor(rand() * arr.length)];
   const leagues = data.leagues.map((l) => l.id);
@@ -63,6 +71,30 @@ export function dailyCriterion(date: string): { criterion: Criterion; difficulty
     if (size >= 40) return { criterion: c, difficulty };
   }
   return { criterion: { league: 'PL' }, difficulty };
+}
+
+/** The frozen challenge of each date (drawn and stored the first time a date is asked for). */
+export async function dailyChallenges(db: D1Database, dates: string[]): Promise<Map<string, DailyPick>> {
+  const out = new Map<string, DailyPick>();
+  if (!dates.length) return out;
+  const load = async (ds: string[]) => {
+    const rows = await db.prepare(`SELECT date, criterion FROM daily_challenges WHERE date IN (${ds.map(() => '?').join(',')})`)
+      .bind(...ds).all<{ date: string; criterion: string }>();
+    for (const r of rows.results) out.set(r.date, { criterion: JSON.parse(r.criterion), difficulty: dailyDifficulty(r.date) });
+  };
+  await load(dates);
+  const missing = dates.filter((d) => !out.has(d));
+  if (missing.length) {
+    const now = Date.now();
+    const insert = db.prepare('INSERT OR IGNORE INTO daily_challenges (date, criterion, created_at) VALUES (?, ?, ?)');
+    await db.batch(missing.map((d) => insert.bind(d, JSON.stringify(drawDailyCriterion(d).criterion), now)));
+    await load(missing); // another request may have frozen the day first: keep its version
+  }
+  return out;
+}
+
+export async function dailyChallenge(db: D1Database, date: string): Promise<DailyPick> {
+  return (await dailyChallenges(db, [date])).get(date)!;
 }
 
 /** Days in a row with a daily challenge played; today not played yet keeps yesterday's streak alive. */
