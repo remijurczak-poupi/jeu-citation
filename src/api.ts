@@ -1,5 +1,5 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { MysteryBoard, MysteryHistoryItem, MysteryInfo, MysteryQuestion, MysteryState, Challenge, GameRecap, ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
+import type { MysteryMeta, MysteryBoard, MysteryHistoryItem, MysteryInfo, MysteryQuestion, MysteryState, Challenge, GameRecap, ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
 
 export interface Session extends Profile { id: string; secret: string; guest?: boolean }
 
@@ -74,6 +74,8 @@ export const api = {
   mysteryAsk: (question: MysteryQuestion, date?: string) => call<MysteryState>('POST', '/mystery/ask', { question, date }),
   mysteryGuess: (p: { text?: string; pick?: string }, date?: string) => call<{ state?: MysteryState; choose?: Suggestion[] }>('POST', '/mystery/guess', { ...p, date }),
   mysteryGiveUp: (date?: string) => call<MysteryState>('POST', '/mystery/giveup', { date }),
+  mysteryHint: (hint: string, date?: string) => call<MysteryState>('POST', '/mystery/hint', { hint, date }),
+  mysteryMeta: () => call<MysteryMeta>('GET', '/mystery/meta'),
   mysteryBoard: (date?: string) => call<MysteryBoard>('GET', '/mystery/board' + (date ? `?date=${date}` : '')),
   mysteryHistory: () => call<MysteryHistoryItem[]>('GET', '/mystery/history'),
   badges: () => call<Badge[]>('GET', '/badges'),

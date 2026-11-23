@@ -12,7 +12,7 @@ on:
   # Also runs when the refresh itself changes, so that a new version is tried right away.
   push:
     branches: [main, preview]
-    paths: [scripts/build-wiki-careers.mjs, .github/workflows/refresh-data.yml]
+    paths: [scripts/build-wiki-careers.mjs, scripts/build-mystery-extra.mjs, .github/workflows/refresh-data.yml]
 
 permissions:
   contents: write
@@ -55,6 +55,11 @@ jobs:
             echo "::warning::Wikipedia careers refresh failed, keeping the previous ones"; git checkout scripts/wiki-careers.json 2>/dev/null || true
           fi
 
+      - name: Mystery player extras (full careers, birthplaces, youth clubs)
+        run: |
+          # About 70 Wikipedia requests. If it fails, keep last week's file.
+          node scripts/build-mystery-extra.mjs --refresh || { echo "::warning::Mystery extras refresh failed, keeping the previous ones"; git checkout src/data/mystery-extra.json; }
+
       - name: Check nothing important disappeared
         run: node scripts/check-data.mjs "$RUNNER_TEMP/football-before.json" src/data/football.json
 
@@ -64,7 +69,7 @@ jobs:
       - name: Commit
         id: commit
         run: |
-          git add src/data/football.json scripts/wiki-data.json scripts/wiki-careers.json
+          git add src/data/football.json scripts/wiki-data.json scripts/wiki-careers.json src/data/mystery-extra.json
           if git diff --cached --quiet; then echo "No change"; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "Weekly data refresh ($(date -u +%Y-%m-%d))"

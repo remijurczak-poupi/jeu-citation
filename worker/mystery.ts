@@ -1,8 +1,71 @@
 // Mystery player: second daily game. One hidden player a day, the same for everyone;
 // players ask yes/no questions from a guided list and try to name them in 20 questions or fewer.
 import { clubIndex, data, playerIndex, playerStints } from './data';
-import type { Continent, LeagueId, MysteryNum, MysteryQuestion, MysteryReveal } from '../shared/types';
+import extraRaw from '../src/data/mystery-extra.json';
+import type { Continent, LeagueId, MysteryMeta, MysteryNum, MysteryQuestion, MysteryReveal } from '../shared/types';
 import { CONTINENTS, MYSTERY_NUMS } from '../shared/types';
+
+/** Full careers, birthplaces and youth clubs of the players that can be picked (scripts/build-mystery-extra.mjs). */
+interface Extra {
+  clubs: Record<string, { n: string; nf?: string; c: string }>;
+  players: Record<string, { s?: [string, number | null, number | null][]; y?: string[]; b?: { n: string; nf?: string; c: string } }>;
+}
+const extra = extraRaw as unknown as Extra;
+const extraOf = (p: number) => extra.players[data.players[p].q];
+const BIG5_COUNTRY: Record<string, string> = { PL: 'GB', L1: 'FR', LL: 'ES', SA: 'IT', BL: 'DE' };
+/** Country of a club: from the extra data, else from its big-5 league. */
+function clubCountry(q: string): string {
+  const e = extra.clubs[q];
+  if (e?.c) return e.c === 'MC' ? 'FR' : e.c; // Monaco plays in the French league
+  const i = clubIndex(q);
+  const lg = i !== undefined ? Object.keys(data.clubs[i].l)[0] : undefined;
+  return lg ? BIG5_COUNTRY[lg] ?? '' : '';
+}
+/** Senior clubs (Wikidata ids) over the whole career: extra data plus the big-5 stints. */
+function allClubs(p: number): Set<string> {
+  const out = new Set((extraOf(p)?.s ?? []).map((s) => s[0]));
+  for (const st of playerStints(p)) out.add(data.clubs[st[1]].q);
+  return out;
+}
+/** Club now: an open stint in the extra data, else the big-5 one. */
+function clubsNow(p: number): string[] {
+  if (!data.players[p].x) return [];
+  const big = currentClubs(p).map((c) => data.clubs[c].q);
+  const s = extraOf(p)?.s ?? [];
+  const open = s.filter((x) => x[1] !== null && x[2] === null && x[1] >= data.currentSeason - 6);
+  // The latest open stint wins (Wikidata sometimes leaves an old one open).
+  const latest = open.sort((a, b) => b[1]! - a[1]!)[0];
+  if (latest && !big.length) return [latest[0]];
+  if (latest && big.length && latest[1]! > data.currentSeason - 1 && !big.includes(latest[0])) return [latest[0]];
+  return big;
+}
+/** Clubs, countries and lists for the question builder. */
+let metaCache: MysteryMeta | null = null;
+export function mysteryMeta(): MysteryMeta {
+  if (metaCache) return metaCache;
+  const big = new Set(data.clubs.map((c) => c.q));
+  const uses = new Map<string, number>();
+  const countries = new Map<string, number>(), births = new Map<string, number>();
+  for (const e of Object.values(extra.players)) {
+    for (const q of new Set([...(e.s ?? []).map((s) => s[0]), ...(e.y ?? [])])) {
+      uses.set(q, (uses.get(q) ?? 0) + 1);
+      const c = extra.clubs[q]?.c;
+      if (c) countries.set(c, (countries.get(c) ?? 0) + 1);
+    }
+    if (e.b?.c) births.set(e.b.c, (births.get(e.b.c) ?? 0) + 1);
+  }
+  const byCount = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  metaCache = {
+    clubs: [...uses].filter(([q, n]) => n >= 2 && !big.has(q) && extra.clubs[q]).map(([q]) => ({ q, ...extra.clubs[q] })),
+    clubCountries: byCount(countries),
+    birthCountries: byCount(births),
+  };
+  return metaCache;
+}
+const validClub = (q: unknown): q is string => typeof q === 'string' && (clubIndex(q) !== undefined || !!extra.clubs[q]);
+const validCountry = (c: unknown): c is string => typeof c === 'string' && /^[A-Z]{2}$/.test(c);
+/** The country a player represents, as an ISO code of a state (home nations count as GB). */
+const stateOf = (cc?: string) => (cc?.startsWith('GB') ? 'GB' : cc?.split('-')[0] ?? '');
 
 export const MYSTERY_EPOCH = Date.UTC(2026, 10, 23); // mystery player #1
 
@@ -120,6 +183,8 @@ export function numberOf(p: number, f: MysteryNum): number | undefined {
       return ys.size;
     }
     case 'topScorerTimes': return (pl.ts ?? []).length;
+    case 'allClubs': return allClubs(p).size;
+    case 'allCountries': return new Set([...allClubs(p)].map(clubCountry).filter(Boolean)).size;
     case 'ballonDorTimes': return (pl.bd ?? []).length;
     case 'titles': {
       let n = 0;
@@ -151,10 +216,7 @@ export function answer(p: number, q: MysteryQuestion): boolean | undefined {
     case 'active': return !!pl.x;
     case 'international': return !!pl.i;
     case 'league': return league(q.v) ? leaguesOf(p).has(q.v) : undefined;
-    case 'club': {
-      const c = typeof q.v === 'string' ? clubIndex(q.v) : undefined;
-      return c === undefined ? undefined : playerStints(p).some((s) => s[1] === c);
-    }
+    case 'club': return validClub(q.v) ? allClubs(p).has(q.v) : undefined;
     case 'clubNowIn':
       if (!league(q.v)) return undefined;
       return playerStints(p).some((s) => !!data.clubs[s[1]].l[q.v]?.includes(data.currentSeason));
@@ -164,10 +226,16 @@ export function answer(p: number, q: MysteryQuestion): boolean | undefined {
       const inLeague = (lg: LeagueId) => now.some((c) => !!data.clubs[c].l[lg]?.includes(data.currentSeason));
       return q.v === 'other' ? !!pl.x && !LEAGUES().some(inLeague) : inLeague(q.v);
     }
-    case 'nowClub': {
-      const c = typeof q.v === 'string' ? clubIndex(q.v) : undefined;
-      return c === undefined ? undefined : currentClubs(p).includes(c);
-    }
+    case 'nowClub': return validClub(q.v) ? clubsNow(p).includes(q.v) : undefined;
+    case 'playedCountry': return validCountry(q.v) ? [...allClubs(p)].some((c) => clubCountry(c) === q.v) : undefined;
+    case 'playedContinent': return CONTINENTS.includes(q.v) ? [...allClubs(p)].some((c) => continentOf(clubCountry(c)) === q.v) : undefined;
+    case 'nowCountry': return validCountry(q.v) ? clubsNow(p).some((c) => clubCountry(c) === q.v) : undefined;
+    case 'youthClub': return validClub(q.v) ? !!extraOf(p)?.y?.includes(q.v) : undefined;
+    case 'youthCountry': return validCountry(q.v) ? !!extraOf(p)?.y?.some((c) => clubCountry(c) === q.v) : undefined;
+    case 'youthHome': return !!extraOf(p)?.y?.some((c) => clubCountry(c) === stateOf(pl.c?.[0]));
+    case 'bornCountry': return validCountry(q.v) ? extraOf(p)?.b?.c === q.v : undefined;
+    case 'bornContinent': return CONTINENTS.includes(q.v) ? continentOf(extraOf(p)?.b?.c) === q.v : undefined;
+    case 'bornHome': { const b = extraOf(p)?.b?.c; return !!b && b === stateOf(pl.c?.[0]); }
     case 'season':
       if (!Number.isInteger(q.v) || q.v < data.firstSeason || q.v > data.currentSeason) return undefined;
       return bigSeasons(p).has(q.v);
@@ -230,6 +298,13 @@ export function answer(p: number, q: MysteryQuestion): boolean | undefined {
         const top = new Set(Object.values(cl.l).flat());
         for (let y = Math.max(s, data.firstSeason); y <= Math.min(lastSeason(p, s, e), data.currentSeason); y++) if (!top.has(y)) return true;
       }
+      // Clubs never in a top flight since 2000, in France, Spain, Italy or Germany (British clubs can be Scottish: left out).
+      const big = new Set(data.clubs.map((c) => c.q));
+      for (const [c, from, to] of extraOf(p)?.s ?? []) {
+        const cc = extra.clubs[c]?.c;
+        if (big.has(c) || !cc || cc === 'GB' || (from ?? 0) < data.firstSeason && (to ?? 9999) < data.firstSeason + 1) continue;
+        if (q.v ? BIG5_COUNTRY[q.v] === cc : ['FR', 'ES', 'IT', 'DE'].includes(cc)) return true;
+      }
       return false;
     }
     default: return undefined;
@@ -256,6 +331,8 @@ function candidatePools() {
   const ok = data.players
     .map((pl, p) => ({ pl, p }))
     .filter(({ pl, p }) => pl.b && pl.b >= 1975 && pl.p?.length && pl.c?.length && playerStints(p).some((s) => s[2] >= data.firstSeason))
+    // Only players with the extra facts, so that questions on them never answer a wrong "no".
+    .filter(({ pl }) => { const e = extra.players[pl.q]; return !!(e?.s?.length && e.b?.c && e.y?.length); })
     .sort((a, b) => b.pl.s - a.pl.s || a.p - b.p)
     .map(({ p }) => p);
   pools = { easy: ok.slice(0, 250), hard: ok.slice(250, 1000) };
@@ -281,6 +358,37 @@ export function pickMystery(date: string, used: Set<string>): number {
   return list[Math.floor(rng('mystery:' + date)() * list.length)];
 }
 
+/** Clubs by importance: big-5 appearances when known, else about 25 games a season. */
+function mainClubs(p: number): string[] {
+  const weight = new Map<string, number>();
+  const add = (q: string, w: number) => weight.set(q, Math.max(weight.get(q) ?? 0, 0) + w);
+  const bigApps = new Map<string, number>();
+  for (const [, club, s, e, apps] of playerStints(p)) {
+    const q = data.clubs[club].q;
+    const w = apps >= 0 ? apps : s >= 0 ? (lastSeason(p, s, e) - s + 1) * 25 : 0;
+    bigApps.set(q, (bigApps.get(q) ?? 0) + w);
+  }
+  for (const [q, w] of bigApps) add(q, w);
+  for (const [q, from, to] of extraOf(p)?.s ?? []) {
+    if (bigApps.has(q) || from === null) continue;
+    add(q, Math.max(1, (to ?? data.currentSeason + 1) - from) * 25);
+  }
+  return [...weight].sort((a, b) => b[1] - a[1]).map(([q]) => q);
+}
+export function clubLabel(q: string): string {
+  const i = clubIndex(q);
+  return i !== undefined ? data.clubs[i].n : extra.clubs[q]?.n ?? q;
+}
+/** A hint's content. club3 is drawn among the 3 main clubs with the day as seed, so everyone gets the same one. */
+export function hintOf(p: number, hint: string, date: string): { v: string; n?: string } | undefined {
+  if (hint === 'last') return { v: initialOf(p) };
+  if (hint === 'first') { const w = nameWords(p); return w.length > 1 ? { v: fold(w[0]).replace(/[^A-Z]/g, '').charAt(0) } : { v: '', n: '' }; }
+  const clubs = mainClubs(p);
+  if (!clubs.length) return undefined;
+  const q = hint === 'club1' ? clubs[0] : hint === 'club3' ? clubs[Math.floor(rng('hint:' + date)() * Math.min(3, clubs.length))] : undefined;
+  return q ? { v: q, n: clubLabel(q) } : undefined;
+}
+
 export function reveal(p: number): MysteryReveal {
   const pl = data.players[p];
   const clubs = playerStints(p)
@@ -293,5 +401,20 @@ export function reveal(p: number): MysteryReveal {
     if (prev && prev.n === c.n && prev.to !== undefined && c.from !== undefined && c.from <= prev.to + 1) prev.to = Math.max(prev.to, c.to!);
     else merged.push({ ...c });
   }
-  return { q: pl.q, n: pl.n, ...(pl.b ? { b: pl.b } : {}), ...(pl.c?.[0] ? { c: pl.c[0] } : {}), ...(pl.p?.[0] ? { p: pl.p[0] } : {}), clubs: merged };
+  for (const c of merged) if (c.to !== undefined) c.to += 1; // seasons -> calendar years (2015-16 ends in 2016)
+  const e = extraOf(p);
+  const name = (q: string) => { const i = clubIndex(q); return i !== undefined ? data.clubs[i].nf ?? data.clubs[i].n : extra.clubs[q]?.n ?? q; };
+  // Whole career when known (calendar years, as on Wikidata), else the big-5 seasons.
+  const full: MysteryReveal['clubs'] = [];
+  for (const [q, from, to] of e?.s ?? []) {
+    const prev = full[full.length - 1];
+    if (prev && prev.n === name(q)) { if (to !== null) prev.to = Math.max(prev.to ?? to, to); else delete prev.to; continue; }
+    full.push({ n: name(q), c: clubCountry(q), ...(from !== null ? { from } : {}), ...(to !== null ? { to } : {}) });
+  }
+  return {
+    q: pl.q, n: pl.n, ...(pl.b ? { b: pl.b } : {}), ...(pl.c?.[0] ? { c: pl.c[0] } : {}), ...(pl.p?.[0] ? { p: pl.p[0] } : {}),
+    clubs: full.length ? full : merged,
+    ...(e?.b ? { born: { n: e.b.n, c: e.b.c } } : {}),
+    ...(e?.y?.length ? { youth: e.y.map(name) } : {}),
+  };
 }

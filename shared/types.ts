@@ -213,9 +213,11 @@ export type MysteryNum =
   | 'uclSeasons' // Champions League seasons with his club
   | 'uclWins'
   | 'topScorerTimes' // times league top scorer
-  | 'ballonDorTimes'; // times ranked in the Ballon d'Or
+  | 'ballonDorTimes' // times ranked in the Ballon d'Or
+  | 'allClubs' // senior clubs, any league
+  | 'allCountries'; // countries played in, any league
 export const MYSTERY_NUMS: MysteryNum[] = ['age', 'birthYear', 'height', 'caps', 'clubs', 'leagues', 'debut', 'seasons', 'worldCups', 'titles',
-  'euros', 'copas', 'tournaments', 'countries', 'loyalty', 'lastSeason', 'uclSeasons', 'uclWins', 'topScorerTimes', 'ballonDorTimes'];
+  'euros', 'copas', 'tournaments', 'countries', 'loyalty', 'lastSeason', 'uclSeasons', 'uclWins', 'topScorerTimes', 'ballonDorTimes', 'allClubs', 'allCountries'];
 export type MysteryCmp = 'gt' | 'lt' | 'eq';
 /** A yes/no question about the day's mystery player, built from a guided list (no free text). */
 export type MysteryQuestion =
@@ -247,12 +249,36 @@ export type MysteryQuestion =
   | { k: 'home' } // played in a big-5 league of his own country
   | { k: 'abroad' } // played in a big-5 league outside his country
   | { k: 'returned' } // came back to a club he had left
+  | { k: 'playedCountry'; v: string } // played for a club of that country (any league)
+  | { k: 'playedContinent'; v: Continent }
+  | { k: 'nowCountry'; v: string } // his club now is in that country
+  | { k: 'youthClub'; v: string } // trained at that club (youth career)
+  | { k: 'youthCountry'; v: string }
+  | { k: 'youthHome' } // trained in the country he represents
+  | { k: 'bornCountry'; v: string }
+  | { k: 'bornContinent'; v: Continent }
+  | { k: 'bornHome' } // born in the country he represents
   | { k: 'lowerDiv'; v?: LeagueId }; // played a season below the top flight with a club of that country (known clubs only)
 export const MYSTERY_MAX = 50; // questions + guesses
-export type MysteryStep = { q: MysteryQuestion; a: boolean } | { guess: string; a: boolean };
+/** Paid hints: they cost several questions. */
+export type MysteryHint = 'first' | 'last' | 'club3' | 'club1';
+export const MYSTERY_HINTS: { id: MysteryHint; cost: number }[] = [
+  { id: 'first', cost: 10 }, // first-name initial
+  { id: 'last', cost: 10 }, // last-name initial
+  { id: 'club3', cost: 10 }, // one of his 3 main clubs (drawn by day, the same for everyone)
+  { id: 'club1', cost: 20 }, // his main club
+];
+export type MysteryStep =
+  | { q: MysteryQuestion; a: boolean }
+  | { guess: string; a: boolean }
+  | { hint: MysteryHint; v: string; n?: string; cost: number }; // v = letter or club id, n = club name ('' = single name)
+/** Clubs outside the big 5 and countries the extra questions can name. */
+export interface MysteryMeta { clubs: { q: string; n: string; nf?: string; c: string }[]; clubCountries: string[]; birthCountries: string[] }
 export interface MysteryReveal {
   q: string; n: string; b?: number; c?: string; p?: Position;
-  clubs: { n: string; from?: number; to?: number }[];
+  clubs: { n: string; from?: number; to?: number; c?: string }[];
+  born?: { n: string; c: string }; // birthplace
+  youth?: string[]; // youth clubs
 }
 export interface MysteryState {
   date: string;

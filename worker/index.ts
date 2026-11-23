@@ -9,9 +9,9 @@ import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
 import { verifyReport, type Verdict } from './verify';
 import { compact } from './normalize';
-import { answer, MYSTERY_EPOCH, mysteryDifficulty, mysteryNumber, normQ, pickMystery, reveal, sameQuestion } from './mystery';
+import { answer, hintOf, mysteryMeta, MYSTERY_EPOCH, mysteryDifficulty, mysteryNumber, normQ, pickMystery, reveal, sameQuestion } from './mystery';
 import type { Challenge, DailyStreak, GameRecap, Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
-import { MODE_RULES, MYSTERY_MAX, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
+import { MODE_RULES, MYSTERY_HINTS, MYSTERY_MAX, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
 import type { MysteryBoard, MysteryHistoryItem, MysteryInfo, MysteryQuestion, MysteryState, MysteryStep } from '../shared/types';
 
 export { Room } from './room';
@@ -941,6 +941,28 @@ app.post('/api/mystery/guess', async (c) => {
   return c.json({ state: mysteryState(g, g.status === 'active' ? null : p) });
 });
 
+app.post('/api/mystery/hint', async (c) => {
+  const me = requireMe(c);
+  const body = (await c.req.json().catch(() => ({}))) as { date?: string; hint?: string };
+  const date = mysteryDate(body.date);
+  const def = MYSTERY_HINTS.find((h) => h.id === body.hint);
+  if (!def) throw new HttpError(400, 'bad_hint');
+  const p = await mysteryPlayer(c.env, date);
+  const g = await loadMystery(c, me, date);
+  if (g.status !== 'active') return c.json(mysteryState(g, p));
+  const steps = JSON.parse(g.steps) as StoredStep[];
+  if (steps.some((s) => 'hint' in s && s.hint === def.id)) return c.json(mysteryState(g, null));
+  if (g.used + def.cost >= MYSTERY_MAX) throw new HttpError(400, 'not_enough_questions'); // keep at least one guess
+  const h = hintOf(p, def.id, date);
+  if (!h) throw new HttpError(400, 'bad_hint');
+  const prevUsed = g.used, prevLen = steps.length;
+  steps.push({ hint: def.id, ...h, cost: def.cost });
+  g.used += def.cost;
+  g.steps = JSON.stringify(steps);
+  await saveMystery(c, g, prevUsed, prevLen);
+  return c.json(mysteryState(g, null));
+});
+
 app.post('/api/mystery/giveup', async (c) => {
   const me = requireMe(c);
   const body = (await c.req.json().catch(() => ({}))) as { date?: string };
@@ -953,6 +975,11 @@ app.post('/api/mystery/giveup', async (c) => {
     await saveMystery(c, g, g.used, prevLen);
   }
   return c.json(mysteryState(g, p));
+});
+
+app.get('/api/mystery/meta', (c) => {
+  c.header('Cache-Control', 'public, max-age=3600');
+  return c.json(mysteryMeta());
 });
 
 app.get('/api/mystery/board', async (c) => {

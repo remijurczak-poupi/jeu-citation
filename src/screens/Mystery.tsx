@@ -5,8 +5,8 @@ import { useI18n, type Lang, type T } from '../i18n';
 import { clubName, countryName, flag, leagueName, seasonLabel } from '../format';
 import { GuessInput, ordinal, Silhouette, topShareValue } from '../ui';
 import type { Nav } from '../App';
-import type { Continent, LeagueId, Meta, MysteryBoard, MysteryCmp, MysteryHistoryItem, MysteryInfo, MysteryNum, MysteryQuestion, MysteryState, Position, Suggestion } from '../../shared/types';
-import { CONTINENTS, MYSTERY_MAX } from '../../shared/types';
+import type { MysteryHint, MysteryStep, MysteryMeta, Continent, LeagueId, Meta, MysteryBoard, MysteryCmp, MysteryHistoryItem, MysteryInfo, MysteryNum, MysteryQuestion, MysteryState, Position, Suggestion } from '../../shared/types';
+import { CONTINENTS, MYSTERY_HINTS, MYSTERY_MAX } from '../../shared/types';
 
 // ---------- questions as text ----------
 const YEAR_NUMS: MysteryNum[] = ['birthYear', 'debut', 'lastSeason'];
@@ -15,8 +15,24 @@ function leagueLabel(meta: Meta, id: string, lang: Lang) {
   const l = meta.leagues.find((x) => x.id === id);
   return l ? leagueName(l, lang) : id;
 }
+/** Clubs outside the big 5 (loaded once from the server). */
+let extraClubs: MysteryMeta | null = null;
+let extraPending: Promise<MysteryMeta> | null = null;
+function useMysteryMeta(): MysteryMeta | null {
+  const [x, setX] = useState(extraClubs);
+  useEffect(() => {
+    if (extraClubs) return;
+    extraPending ??= api.mysteryMeta().then((r) => (extraClubs = r));
+    extraPending.then(setX).catch(() => {});
+  }, []);
+  return x;
+}
 export function questionText(q: MysteryQuestion, t: T, meta: Meta, lang: Lang): string {
   const m = t.mystery;
+  const anyClubName = (cq: string) => {
+    const e = extraClubs?.clubs.find((c) => c.q === cq);
+    return e ? (lang === 'fr' && e.nf) || e.n : clubName(meta, cq, lang);
+  };
   switch (q.k) {
     case 'num': {
       const tpl = m.num[q.f]?.[q.op === 'gt' ? 0 : q.op === 'lt' ? 1 : 2] ?? '';
@@ -29,10 +45,10 @@ export function questionText(q: MysteryQuestion, t: T, meta: Meta, lang: Lang): 
     case 'active': return m.q.active;
     case 'international': return m.q.international;
     case 'league': return m.q.league(leagueLabel(meta, q.v, lang));
-    case 'club': return m.q.club(clubName(meta, q.v, lang));
+    case 'club': return m.q.club(anyClubName(q.v));
     case 'clubNowIn': return m.q.clubNowIn(leagueLabel(meta, q.v, lang));
     case 'nowLeague': return q.v === 'other' ? m.q.nowOther : m.q.nowLeague(leagueLabel(meta, q.v, lang));
-    case 'nowClub': return m.q.nowClub(clubName(meta, q.v, lang));
+    case 'nowClub': return m.q.nowClub(anyClubName(q.v));
     case 'season': return m.q.season(seasonLabel(q.v));
     case 'champion': return m.q.champion(q.v ? leagueLabel(meta, q.v, lang) : '');
     case 'ucl': return q.v === 'won' ? m.q.uclWon : m.q.uclPlayed;
@@ -49,19 +65,60 @@ export function questionText(q: MysteryQuestion, t: T, meta: Meta, lang: Lang): 
     case 'home': return m.q.home;
     case 'abroad': return m.q.abroad;
     case 'returned': return m.q.returned;
+    case 'playedCountry': return m.q.playedCountry(`${flag(q.v)} ${countryName(q.v, lang)}`);
+    case 'playedContinent': return m.q.playedContinent(m.continents[q.v]);
+    case 'nowCountry': return m.q.nowCountry(`${flag(q.v)} ${countryName(q.v, lang)}`);
+    case 'youthClub': return m.q.youthClub(anyClubName(q.v));
+    case 'youthCountry': return m.q.youthCountry(`${flag(q.v)} ${countryName(q.v, lang)}`);
+    case 'youthHome': return m.q.youthHome;
+    case 'bornCountry': return m.q.bornCountry(`${flag(q.v)} ${countryName(q.v, lang)}`);
+    case 'bornContinent': return m.q.bornContinent(m.continents[q.v]);
+    case 'bornHome': return m.q.bornHome;
     case 'lowerDiv': return m.q.lowerDiv(q.v ? m.lower[q.v] : '');
   }
 }
 
+/** "Last-name initial: M", "One of his 3 main clubs: Arsenal". */
+function hintText(s: Extract<MysteryStep, { hint: string }>, t: T, meta: Meta, lang: Lang): string {
+  const m = t.mystery;
+  if (s.hint === 'first' || s.hint === 'last') return `${m.hints[s.hint]} : ${s.v || m.singleName}`;
+  const e = extraClubs?.clubs.find((c) => c.q === s.v);
+  const name = e ? (lang === 'fr' && e.nf) || e.n : meta.clubs.some((c) => c.q === s.v) ? clubName(meta, s.v, lang) : s.n ?? s.v;
+  return `${m.hints[s.hint]} : ${name}`;
+}
+
+function Hints({ g, busy, onHint }: { g: MysteryState | null; busy: boolean; onHint: (h: MysteryHint) => void }) {
+  const { t } = useI18n();
+  const m = t.mystery;
+  const used = g?.used ?? 0;
+  const taken = new Set((g?.steps ?? []).flatMap((s) => ('hint' in s ? [s.hint] : [])));
+  return (
+    <section className="card">
+      <h3>{m.hintsTitle}</h3>
+      <p className="hint">{m.hintsHint}</p>
+      <div className="mq-hints">
+        {MYSTERY_HINTS.map((h) => (
+          <button key={h.id} disabled={busy || taken.has(h.id) || used + h.cost >= MYSTERY_MAX} onClick={() => onHint(h.id)}>
+            <span>💡 {m.hints[h.id]}</span><small>{taken.has(h.id) ? '✓' : m.cost(h.cost)}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ---------- question builder ----------
-type Param = 'player' | 'lowerOpt' | 'none' | 'num' | 'position' | 'nation' | 'continent' | 'league' | 'leagueOpt' | 'leagueOther' | 'club' | 'season' | 'tournament' | 'letter';
-interface Tpl { id: string; cat: 'who' | 'career' | 'honours' | 'name'; param: Param; num?: MysteryNum; def?: number; min?: number; max?: number }
+type Param = 'clubCountry' | 'birthCountry' | 'player' | 'lowerOpt' | 'none' | 'num' | 'position' | 'nation' | 'continent' | 'league' | 'leagueOpt' | 'leagueOther' | 'club' | 'season' | 'tournament' | 'letter';
+interface Tpl { id: string; cat: 'who' | 'career' | 'clubs' | 'world' | 'honours' | 'name'; param: Param; num?: MysteryNum; def?: number; min?: number; max?: number }
 const TEMPLATES: Tpl[] = [
   { id: 'position', cat: 'who', param: 'position' },
   { id: 'multiPos', cat: 'who', param: 'none' },
   { id: 'nation', cat: 'who', param: 'nation' },
   { id: 'citizen', cat: 'who', param: 'nation' },
   { id: 'continent', cat: 'who', param: 'continent' },
+  { id: 'bornCountry', cat: 'who', param: 'birthCountry' },
+  { id: 'bornContinent', cat: 'who', param: 'continent' },
+  { id: 'bornHome', cat: 'who', param: 'none' },
   { id: 'age', cat: 'who', param: 'num', num: 'age', def: 30, min: 15, max: 60 },
   { id: 'birthYear', cat: 'who', param: 'num', num: 'birthYear', def: 1990, min: 1960, max: 2010 },
   { id: 'height', cat: 'who', param: 'num', num: 'height', def: 180, min: 155, max: 210 },
@@ -70,23 +127,31 @@ const TEMPLATES: Tpl[] = [
   { id: 'caps', cat: 'who', param: 'num', num: 'caps', def: 20, min: 0, max: 250 },
   { id: 'active', cat: 'career', param: 'none' },
   { id: 'nowLeague', cat: 'career', param: 'leagueOther' },
-  { id: 'nowClub', cat: 'career', param: 'club' },
+  { id: 'nowClub', cat: 'clubs', param: 'club' },
   { id: 'league', cat: 'career', param: 'league' },
-  { id: 'club', cat: 'career', param: 'club' },
-  { id: 'clubNowIn', cat: 'career', param: 'league' },
-  { id: 'clubs', cat: 'career', param: 'num', num: 'clubs', def: 3, min: 0, max: 20 },
+  { id: 'club', cat: 'clubs', param: 'club' },
+  { id: 'clubNowIn', cat: 'clubs', param: 'league' },
+  { id: 'clubs', cat: 'clubs', param: 'num', num: 'clubs', def: 3, min: 0, max: 20 },
   { id: 'leagues', cat: 'career', param: 'num', num: 'leagues', def: 1, min: 0, max: 5 },
   { id: 'debut', cat: 'career', param: 'num', num: 'debut', def: 2010, min: 2000, max: 2026 },
   { id: 'seasons', cat: 'career', param: 'num', num: 'seasons', def: 10, min: 0, max: 27 },
   { id: 'season', cat: 'career', param: 'season' },
   { id: 'lastSeason', cat: 'career', param: 'num', num: 'lastSeason', def: 2015, min: 2000, max: 2026 },
-  { id: 'loyalty', cat: 'career', param: 'num', num: 'loyalty', def: 5, min: 0, max: 27 },
-  { id: 'countries', cat: 'career', param: 'num', num: 'countries', def: 1, min: 0, max: 5 },
-  { id: 'home', cat: 'career', param: 'none' },
-  { id: 'abroad', cat: 'career', param: 'none' },
-  { id: 'returned', cat: 'career', param: 'none' },
+  { id: 'loyalty', cat: 'clubs', param: 'num', num: 'loyalty', def: 5, min: 0, max: 27 },
+  { id: 'countries', cat: 'world', param: 'num', num: 'countries', def: 1, min: 0, max: 5 },
+  { id: 'home', cat: 'world', param: 'none' },
+  { id: 'abroad', cat: 'world', param: 'none' },
+  { id: 'returned', cat: 'clubs', param: 'none' },
   { id: 'lowerDiv', cat: 'career', param: 'lowerOpt' },
-  { id: 'teammate', cat: 'career', param: 'player' },
+  { id: 'teammate', cat: 'clubs', param: 'player' },
+  { id: 'playedCountry', cat: 'world', param: 'clubCountry' },
+  { id: 'playedContinent', cat: 'world', param: 'continent' },
+  { id: 'nowCountry', cat: 'world', param: 'clubCountry' },
+  { id: 'allClubs', cat: 'clubs', param: 'num', num: 'allClubs', def: 4, min: 0, max: 25 },
+  { id: 'allCountries', cat: 'world', param: 'num', num: 'allCountries', def: 2, min: 0, max: 12 },
+  { id: 'youthClub', cat: 'clubs', param: 'club' },
+  { id: 'youthCountry', cat: 'world', param: 'clubCountry' },
+  { id: 'youthHome', cat: 'world', param: 'none' },
   { id: 'champion', cat: 'honours', param: 'leagueOpt' },
   { id: 'titles', cat: 'honours', param: 'num', num: 'titles', def: 1, min: 0, max: 20 },
   { id: 'uclPlayed', cat: 'honours', param: 'none' },
@@ -108,9 +173,9 @@ const TEMPLATES: Tpl[] = [
   { id: 'firstInitial', cat: 'name', param: 'letter' },
   { id: 'mononym', cat: 'name', param: 'none' },
 ];
-const CATS = ['who', 'career', 'honours', 'name'] as const;
+const CATS = ['who', 'career', 'clubs', 'world', 'honours', 'name'] as const;
 
-interface Values { op: MysteryCmp; n: Record<string, number>; pos: Position; nation: string; continent: Continent; league: LeagueId; leagueOpt: LeagueId | ''; leagueOther: LeagueId | 'other'; club: string; season: number; tour: 'WC' | 'EU' | 'CA'; year: string; won: boolean; letter: string; mate?: { q: string; n: string } }
+interface Values { op: MysteryCmp; n: Record<string, number>; pos: Position; nation: string; continent: Continent; league: LeagueId; leagueOpt: LeagueId | ''; leagueOther: LeagueId | 'other'; club: string; season: number; tour: 'WC' | 'EU' | 'CA'; year: string; won: boolean; letter: string; mate?: { q: string; n: string }; country: string; bornIn: string }
 
 function build(tpl: Tpl, v: Values): MysteryQuestion {
   switch (tpl.id) {
@@ -143,6 +208,15 @@ function build(tpl: Tpl, v: Values): MysteryQuestion {
     case 'home': return { k: 'home' };
     case 'abroad': return { k: 'abroad' };
     case 'returned': return { k: 'returned' };
+    case 'playedCountry': return { k: 'playedCountry', v: v.country };
+    case 'playedContinent': return { k: 'playedContinent', v: v.continent };
+    case 'nowCountry': return { k: 'nowCountry', v: v.country };
+    case 'youthClub': return { k: 'youthClub', v: v.club };
+    case 'youthCountry': return { k: 'youthCountry', v: v.country };
+    case 'youthHome': return { k: 'youthHome' };
+    case 'bornCountry': return { k: 'bornCountry', v: v.bornIn };
+    case 'bornContinent': return { k: 'bornContinent', v: v.continent };
+    case 'bornHome': return { k: 'bornHome' };
     case 'lowerDiv': return v.leagueOpt ? { k: 'lowerDiv', v: v.leagueOpt } : { k: 'lowerDiv' };
     default: return { k: 'num', f: tpl.num!, op: v.op, v: v.n[tpl.id] ?? tpl.def! };
   }
@@ -156,10 +230,17 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
   const [tplId, setTplId] = useState('position');
   const [v, setV] = useState<Values>({
     op: 'gt', n: {}, pos: 'FW', nation: meta.nationalities[0] ?? 'FR', continent: 'EU', league: 'PL', leagueOpt: '', leagueOther: 'PL',
-    club: '', season: meta.currentSeason - 1, tour: 'WC', year: '', won: false, letter: 'M',
+    club: '', season: meta.currentSeason - 1, tour: 'WC', year: '', won: false, letter: 'M', country: 'PT', bornIn: 'FR',
   });
   const set = (p: Partial<Values>) => setV((x) => ({ ...x, ...p }));
-  const clubs = useMemo(() => [...meta.clubs].map((c) => ({ q: c.q, name: clubName(meta, c.q, lang) })).sort((a, b) => a.name.localeCompare(b.name, lang)), [meta, lang]);
+  const mm = useMysteryMeta();
+  const clubs = useMemo(() => [
+    ...meta.clubs.map((c) => ({ q: c.q, name: clubName(meta, c.q, lang) })),
+    ...(mm?.clubs ?? []).map((c) => ({ q: c.q, name: `${(lang === 'fr' && c.nf) || c.n} ${flag(c.c)}` })),
+  ].sort((a, b) => a.name.localeCompare(b.name, lang)), [meta, lang, mm]);
+  const byName = (list: string[]) => [...list].sort((a, b) => countryName(a, lang).localeCompare(countryName(b, lang), lang));
+  const clubCountries = useMemo(() => byName(mm?.clubCountries ?? ['GB', 'FR', 'ES', 'IT', 'DE', 'PT']), [mm, lang]);
+  const birthCountries = useMemo(() => byName(mm?.birthCountries ?? ['FR']), [mm, lang]);
   const nations = useMemo(() => [...meta.nationalities].sort((a, b) => countryName(a, lang).localeCompare(countryName(b, lang), lang)), [meta, lang]);
   const tpl = TEMPLATES.find((x) => x.id === tplId)!;
   const [mateChoices, setMateChoices] = useState<Suggestion[] | null>(null);
@@ -207,6 +288,16 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
         {tpl.param === 'nation' && (
           <select value={v.nation} onChange={(e) => set({ nation: e.target.value })}>
             {nations.map((c) => <option key={c} value={c}>{flag(c)} {countryName(c, lang)}</option>)}
+          </select>
+        )}
+        {tpl.param === 'clubCountry' && (
+          <select value={v.country} onChange={(e) => set({ country: e.target.value })}>
+            {clubCountries.map((c) => <option key={c} value={c}>{flag(c)} {countryName(c, lang)}</option>)}
+          </select>
+        )}
+        {tpl.param === 'birthCountry' && (
+          <select value={v.bornIn} onChange={(e) => set({ bornIn: e.target.value })}>
+            {birthCountries.map((c) => <option key={c} value={c}>{flag(c)} {countryName(c, lang)}</option>)}
           </select>
         )}
         {tpl.param === 'continent' && <div className="mq-ops wrap">{CONTINENTS.map((c) => (
@@ -305,6 +396,7 @@ export function MysteryScreen({ meta, nav, date }: { meta: Meta; nav: Nav; date?
       setG(r.state);
     }
   };
+  const hint = async (h: MysteryHint) => { const s = await run(() => api.mysteryHint(h, date)); if (s) setG(s); };
   const giveUp = async () => { setConfirmGiveUp(false); const s = await run(() => api.mysteryGiveUp(date)); if (s) setG(s); };
 
   if (error) return <div className="page narrow"><p className="error">{error}</p></div>;
@@ -347,6 +439,7 @@ export function MysteryScreen({ meta, nav, date }: { meta: Meta; nav: Nav; date?
         <QuestionBuilder meta={meta} asked={asked} busy={busy} onAsk={ask} />
         <div className="flash-slot">{flash && <div key={flash.key} className={`flash ${flash.ok ? 'ok' : 'wrong'}`}>{flash.text}</div>}</div>
       </section>
+      <Hints g={g} busy={busy} onHint={hint} />
       <section className="card">
         <h3>{m.guessTitle}</h3>
         <GuessInput onGuess={guess} suggestions choices={choices} onClearChoices={() => setChoices(null)} placeholder={m.guessPlaceholder} />
@@ -369,7 +462,12 @@ function Steps({ g, meta }: { g: MysteryState; meta: Meta }) {
       <h3>{t.mystery.questions}</h3>
       <ol className="mq-steps" reversed>
         {[...g.steps].reverse().map((s, i) => (
-          <li key={g.steps.length - i} className={s.a ? 'yes' : 'no'}>
+          'hint' in s ? (
+            <li key={g.steps.length - i} className="hint-step">
+              <span>💡 {hintText(s, t, meta, lang)}</span>
+              <strong>−{s.cost}</strong>
+            </li>
+          ) : <li key={g.steps.length - i} className={s.a ? 'yes' : 'no'}>
             <span>{'q' in s ? questionText(s.q, t, meta, lang) : `🎯 ${s.guess} ?`}</span>
             <strong>{s.a ? t.mystery.yes : t.mystery.no}</strong>
           </li>
@@ -384,7 +482,7 @@ function shareCard(g: MysteryState, t: T): string {
   const m = t.mystery;
   const lines = [`${t.appName} · ${m.shareTitle} #${g.number}`];
   lines.push(g.status === 'won' ? `🕵️ ${m.won(g.used)}` : `🕵️ ${m.lost}`);
-  const sq = g.steps.map((s) => ('guess' in s ? (s.a ? '⚽' : '❌') : s.a ? '🟩' : '🟥'));
+  const sq = g.steps.map((s) => ('hint' in s ? '💡' : 'guess' in s ? (s.a ? '⚽' : '❌') : s.a ? '🟩' : '🟥'));
   for (let i = 0; i < sq.length; i += 10) lines.push(sq.slice(i, i + 10).join(''));
   lines.push(location.origin + '/#/mystery');
   return lines.join('\n');
@@ -410,7 +508,9 @@ function MysteryResult({ g, meta }: { g: MysteryState; meta: Meta }) {
           <small>{m.itWas}</small>
           <strong>{r.c ? flag(r.c) + ' ' : ''}{r.n}</strong>
           <span className="hint">{[r.p && t.f.positions[r.p], r.b && m.born(r.b), r.c && countryName(r.c, lang)].filter(Boolean).join(' · ')}</span>
-          <ul className="mq-clubs">{r.clubs.map((c, i) => <li key={i}>{c.n}{c.from !== undefined ? ` (${c.from}–${(c.to ?? c.from) + 1})` : ''}</li>)}</ul>
+          {r.born && <span className="hint">{m.bornIn(r.born.n, r.born.c ? flag(r.born.c) : '')}</span>}
+          {r.youth?.length ? <span className="hint">{m.trainedAt(r.youth.join(', '))}</span> : null}
+          <ul className="mq-clubs">{r.clubs.map((c, i) => <li key={i}>{c.c ? flag(c.c) + ' ' : ''}{c.n}{c.from !== undefined ? ` (${c.from}–${c.to ?? ''})` : ''}</li>)}</ul>
         </div>
       )}
       <div className="actions"><button className="primary" onClick={share}>{copied ? t.copied : t.share}</button></div>

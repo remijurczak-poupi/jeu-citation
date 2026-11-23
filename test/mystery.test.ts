@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answer, initialOf, mysteryNumber, normQ, pickMystery, reveal, sameQuestion } from '../worker/mystery';
+import { answer, hintOf, initialOf, mysteryNumber, normQ, pickMystery, reveal, sameQuestion } from '../worker/mystery';
 import { data, playerIndex } from '../worker/data';
 
 const idx = (name: string) => data.players.findIndex((p) => p.n === name);
@@ -91,5 +91,30 @@ describe('more mystery questions', () => {
     expect(answer(messi, { k: 'num', f: 'uclWins', op: 'eq', v: 4 })).toBe(true);
     expect(answer(messi, { k: 'num', f: 'countries', op: 'eq', v: 2 })).toBe(true);
     expect(answer(messi, { k: 'num', f: 'lastSeason', op: 'eq', v: 2022 })).toBe(true);
+  });
+});
+
+describe('mystery extras and hints', () => {
+  const messi = idx('Lionel Messi');
+  const ronaldo = idx('Cristiano Ronaldo');
+  it('uses the whole career, birthplace and youth clubs', () => {
+    expect(answer(messi, { k: 'playedCountry', v: 'US' })).toBe(true);
+    expect(answer(messi, { k: 'nowCountry', v: 'US' })).toBe(true);
+    expect(answer(messi, { k: 'playedContinent', v: 'NA' })).toBe(true);
+    expect(answer(messi, { k: 'bornCountry', v: 'AR' })).toBe(true);
+    expect(answer(messi, { k: 'bornHome' })).toBe(true);
+    expect(answer(messi, { k: 'youthCountry', v: 'AR' })).toBe(true);
+    expect(answer(messi, { k: 'youthHome' })).toBe(true);
+    expect(answer(ronaldo, { k: 'playedCountry', v: 'SA' })).toBe(true);
+    expect(answer(ronaldo, { k: 'playedCountry', v: 'PT' })).toBe(true);
+    expect(answer(ronaldo, { k: 'num', f: 'allCountries', op: 'eq', v: 5 })).toBe(true);
+    expect(answer(idx('Kylian Mbappé'), { k: 'playedCountry', v: 'FR' })).toBe(true); // Monaco counts as France
+  });
+  it('gives hints', () => {
+    expect(hintOf(messi, 'last', '2026-11-23')).toEqual({ v: 'M' });
+    expect(hintOf(messi, 'first', '2026-11-23')).toEqual({ v: 'L' });
+    expect(hintOf(idx('Neymar'), 'first', '2026-11-23')).toEqual({ v: '', n: '' });
+    expect(hintOf(messi, 'club1', '2026-11-23')?.n).toBe('FC Barcelona');
+    expect(hintOf(messi, 'club3', '2026-11-23')?.v).toBeTruthy();
   });
 });
