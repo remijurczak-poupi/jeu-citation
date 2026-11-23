@@ -9,7 +9,8 @@ import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
 import { verifyReport, type Verdict } from './verify';
 import { compact } from './normalize';
-import type { Challenge, DailyStreak, GameRecap, Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
+import { CLUB_MIN_PLAYERS, LEAGUE_DURATIONS, cleanLeagueName, clubDayRanking, leagueEnd } from './leagues';
+import type { ClubDayBoard, LeagueBoard, LeagueSummary, LeagueView, Challenge, DailyStreak, GameRecap, Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
 import { MODE_RULES, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
 
 export { Room } from './room';
@@ -642,6 +643,7 @@ app.get('/api/leaderboard', async (c) => {
   const since = periodStart(period);
   const theme = RANKED_THEMES.find((r) => r.id === q.theme) ?? RANKED_THEMES[0];
   const board = mode === 'daily' ? boardKey('daily', {}, date) : boardKey(mode, normalizeCriterion(theme.criterion));
+  const club = q.club && FAN_CLUBS.has(q.club) ? q.club : null;
 
   let rows: { device_id: string; score: number }[];
   if (ranking === 'rarity') {
@@ -661,6 +663,16 @@ app.get('/api/leaderboard', async (c) => {
     ).bind(board, mode === 'daily' ? 0 : since).all<{ device_id: string; score: number }>();
     rows = res.results;
   }
+  if (club) {
+    // A club's own league: only its supporters.
+    const ids = new Set((await c.env.DB.prepare('SELECT id FROM profiles WHERE club = ?').bind(club).all<{ id: string }>()).results.map((r) => r.id));
+    rows = rows.filter((r) => ids.has(r.device_id));
+  }
+  return c.json({ board, kind, period, ranking, ...(club ? { club } : {}), ...(await rankRows(c, rows, me)) });
+});
+
+/** Ranks scores (ties share a rank) with the curve, the top 50 and my row. */
+async function rankRows(c: C, rows: { device_id: string; score: number }[], me: Me | null) {
   rows.sort((a, b) => b.score - a.score);
   const top = rows.slice(0, 50);
   const myIdx = me ? rows.findIndex((r) => r.device_id === me.id) : -1;
@@ -671,23 +683,18 @@ app.get('/api/leaderboard', async (c) => {
     const res = await c.env.DB.prepare(`SELECT id, pseudo, club, country FROM profiles WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all<Me>();
     for (const p of res.results) profiles.set(p.id, p);
   }
-  // Ties share a rank.
   const rankAt = (i: number) => rows.findIndex((r) => r.score === rows[i].score) + 1;
   const toRow = (r: { device_id: string; score: number }, i: number): LeaderboardRow => {
     const p = profiles.get(r.device_id);
     return { rank: rankAt(i), pseudo: p?.pseudo ?? '?', club: p?.club ?? 'other', country: p?.country ?? '', score: r.score, ...(me && r.device_id === me.id ? { me: true } : {}) };
   };
-  return c.json({
-    board,
-    kind,
-    period,
-    ranking,
+  return {
     total: rows.length,
     dist: distribution(rows.map((r) => r.score)),
     rows: top.map(toRow),
     me: myIdx >= 0 ? toRow(rows[myIdx], myIdx) : null,
-  });
-});
+  };
+}
 
 /** How many players per score bracket (at most 40 brackets), to draw the curve. */
 function distribution(scores: number[]): { width: number; counts: number[] } {
@@ -790,6 +797,144 @@ app.get('/api/clubs/:q', async (c) => {
   const row = rows.find((r) => r.key === q);
   const all = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM profiles WHERE club = ?').bind(q).first<{ n: number }>();
   return c.json({ q, rank: row?.rank ?? null, active: row?.players ?? 0, supporters: all?.n ?? 0, clubs: rows.length });
+});
+
+// ---------- clubs of the day ----------
+// Every club is a league: its supporters' daily challenge scores, against the other clubs.
+app.get('/api/daily/clubs', async (c) => {
+  const me = c.get('me');
+  const raw = c.req.query('date');
+  const date = raw && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : todayKey();
+  const res = await c.env.DB.prepare(
+    `SELECT p.club AS club, MAX(s.score) AS score FROM scores s JOIN profiles p ON p.id = s.device_id
+     WHERE s.board_key = ? AND p.club NOT IN ('other', '') GROUP BY s.device_id`,
+  ).bind(boardKey('daily', {}, date)).all<{ club: string; score: number }>();
+  const all = clubDayRanking(res.results);
+  const ranked = all.filter((r) => r.rank !== null);
+  const mine = me ? all.find((r) => r.key === me.club) ?? null : null;
+  return c.json({
+    date,
+    rows: ranked.slice(0, 50),
+    me: mine,
+    total: ranked.length,
+    dist: distribution(ranked.map((r) => Math.round(r.score))),
+    min: CLUB_MIN_PLAYERS,
+  } satisfies ClubDayBoard);
+});
+
+// ---------- leagues ----------
+// Anyone can create one (a streamer and their community, friends…) and share its code.
+// Only daily challenges count (one attempt a day, same for everyone); a missed day scores 0.
+const MAX_OWNED_LEAGUES = 10;
+const MAX_JOINED_LEAGUES = 50;
+interface LeagueRow { code: string; name: string; owner_id: string; start_day: string; end_day: string | null }
+
+async function loadLeague(c: C, code: string) {
+  const l = await c.env.DB.prepare('SELECT code, name, owner_id, start_day, end_day FROM leagues WHERE code = ?').bind(code.toUpperCase()).first<LeagueRow>();
+  if (!l) throw new HttpError(404, 'league_not_found');
+  return l;
+}
+
+/** Members' daily points between two days (inclusive). Members who haven't played yet score 0. */
+async function leagueScores(c: C, code: string, from: string, to: string) {
+  const res = await c.env.DB.prepare(
+    `SELECT m.profile_id AS device_id, COALESCE(SUM(s.score), 0) AS score FROM league_members m
+     LEFT JOIN scores s ON s.device_id = m.profile_id AND s.board_key >= ? AND s.board_key <= ?
+     WHERE m.code = ? GROUP BY m.profile_id`,
+  ).bind(boardKey('daily', {}, from), boardKey('daily', {}, to), code).all<{ device_id: string; score: number }>();
+  return res.results;
+}
+const lastCountedDay = (l: LeagueRow, today: string) => (l.end_day && l.end_day < today ? l.end_day : today);
+
+app.post('/api/leagues', async (c) => {
+  const me = requireMe(c);
+  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown; duration?: unknown };
+  const name = cleanLeagueName(body.name);
+  if (!name || BANNED.some((b) => b.length > 3 && pseudoNorm(name).includes(b))) throw new HttpError(400, 'bad_league_name');
+  const duration = LEAGUE_DURATIONS.find((d) => d === body.duration) ?? '6months';
+  const owned = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM leagues WHERE owner_id = ?').bind(me.id).first<{ n: number }>();
+  if ((owned?.n ?? 0) >= MAX_OWNED_LEAGUES) throw new HttpError(429, 'too_many_leagues');
+  const start = todayKey();
+  const now = Date.now();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = randomCode(6);
+    const res = await c.env.DB.batch([
+      c.env.DB.prepare('INSERT OR IGNORE INTO leagues (code, name, owner_id, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(code, name, me.id, start, leagueEnd(start, duration), now),
+      c.env.DB.prepare('INSERT OR IGNORE INTO league_members (code, profile_id, joined_at) SELECT ?, ?, ? WHERE changes() > 0').bind(code, me.id, now),
+    ]);
+    if (res[0].meta.changes) return c.json({ code });
+  }
+  throw new HttpError(503, 'no_code');
+});
+
+/** My leagues, with my rank in each (cumulated points). */
+app.get('/api/leagues', async (c) => {
+  const me = c.get('me');
+  if (!me) return c.json([]);
+  const res = await c.env.DB.prepare(
+    `SELECT l.code, l.name, l.owner_id, l.start_day, l.end_day, (SELECT COUNT(*) FROM league_members x WHERE x.code = l.code) AS members
+     FROM league_members m JOIN leagues l ON l.code = m.code WHERE m.profile_id = ? ORDER BY m.joined_at DESC`,
+  ).bind(me.id).all<LeagueRow & { members: number }>();
+  const today = todayKey();
+  const out: LeagueSummary[] = [];
+  for (const l of res.results) {
+    const scores = await leagueScores(c, l.code, l.start_day, lastCountedDay(l, today));
+    const mine = scores.find((s) => s.device_id === me.id);
+    out.push({
+      code: l.code, name: l.name, start: l.start_day, end: l.end_day, members: l.members, owner: l.owner_id === me.id,
+      myRank: mine ? scores.filter((s) => s.score > mine.score).length + 1 : null,
+    });
+  }
+  return c.json(out);
+});
+
+app.get('/api/leagues/:code', async (c) => {
+  const me = c.get('me');
+  const l = await loadLeague(c, c.req.param('code'));
+  const today = todayKey();
+  const view: LeagueView = c.req.query('view') === 'day' ? 'day' : 'total';
+  const rawDate = c.req.query('date');
+  const last = lastCountedDay(l, today);
+  const date = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && rawDate >= l.start_day && rawDate <= last ? rawDate : last;
+  const scores = view === 'day'
+    ? (await leagueScores(c, l.code, date, date)).filter((s) => s.score > 0)
+    : await leagueScores(c, l.code, l.start_day, last);
+  const members = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM league_members WHERE code = ?').bind(l.code).first<{ n: number }>();
+  const member = me ? !!(await c.env.DB.prepare('SELECT 1 FROM league_members WHERE code = ? AND profile_id = ?').bind(l.code, me.id).first()) : false;
+  const owner = await c.env.DB.prepare('SELECT pseudo FROM profiles WHERE id = ?').bind(l.owner_id).first<{ pseudo: string }>();
+  return c.json({
+    code: l.code, name: l.name, start: l.start_day, end: l.end_day, members: members?.n ?? 0, member, owner: me?.id === l.owner_id,
+    ownerPseudo: owner?.pseudo ?? '?', view, date, ...(await rankRows(c, scores, me)),
+  } satisfies LeagueBoard);
+});
+
+app.post('/api/leagues/:code/join', async (c) => {
+  const me = requireMe(c);
+  const l = await loadLeague(c, c.req.param('code'));
+  if (l.end_day && l.end_day < todayKey()) throw new HttpError(400, 'league_over');
+  const joined = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM league_members WHERE profile_id = ?').bind(me.id).first<{ n: number }>();
+  if ((joined?.n ?? 0) >= MAX_JOINED_LEAGUES) throw new HttpError(429, 'too_many_leagues');
+  await c.env.DB.prepare('INSERT OR IGNORE INTO league_members (code, profile_id, joined_at) VALUES (?, ?, ?)').bind(l.code, me.id, Date.now()).run();
+  return c.json({ ok: true, code: l.code });
+});
+
+app.post('/api/leagues/:code/leave', async (c) => {
+  const me = requireMe(c);
+  const l = await loadLeague(c, c.req.param('code'));
+  if (l.owner_id === me.id) throw new HttpError(400, 'owner_cannot_leave');
+  await c.env.DB.prepare('DELETE FROM league_members WHERE code = ? AND profile_id = ?').bind(l.code, me.id).run();
+  return c.json({ ok: true });
+});
+
+app.delete('/api/leagues/:code', async (c) => {
+  const me = requireMe(c);
+  const l = await loadLeague(c, c.req.param('code'));
+  if (l.owner_id !== me.id) throw new HttpError(403, 'not_owner');
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM league_members WHERE code = ?').bind(l.code),
+    c.env.DB.prepare('DELETE FROM leagues WHERE code = ?').bind(l.code),
+  ]);
+  return c.json({ ok: true });
 });
 
 // ---------- rooms ----------

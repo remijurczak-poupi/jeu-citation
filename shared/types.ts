@@ -190,3 +190,16 @@ export type BoardKind = 'total' | 'best';
 export type BoardPeriod = 'day' | 'week' | 'month' | 'year' | 'all';
 /** "Top 5 % in Ligue 1": share of players with fewer players named (all modes, all time) in that league. */
 export interface Badge { scope: string; top: number; rank: number; total: number }
+
+// ----- Club rankings & leagues -----
+/** Daily clubs ranking: average score of each club's supporters of the day; rank null = fewer than 3 players. */
+export interface ClubDayRow { rank: number | null; key: string; score: number; players: number }
+export interface ClubDayBoard { date: string; rows: ClubDayRow[]; me: ClubDayRow | null; total: number; dist: { width: number; counts: number[] }; min: number }
+export type LeagueDuration = 'week' | 'month' | '3months' | '6months' | 'year' | 'none';
+export interface LeagueSummary { code: string; name: string; start: string; end: string | null; members: number; owner: boolean; myRank: number | null }
+/** total: daily challenge points summed from the start to today (or the end); day: one day's daily challenge. */
+export type LeagueView = 'total' | 'day';
+export interface LeagueBoard {
+  code: string; name: string; start: string; end: string | null; members: number; member: boolean; owner: boolean; ownerPseudo: string;
+  view: LeagueView; date: string; total: number; dist: { width: number; counts: number[] }; rows: LeaderboardRow[]; me: LeaderboardRow | null;
+}
