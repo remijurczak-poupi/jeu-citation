@@ -901,6 +901,7 @@ app.post('/api/mystery/ask', async (c) => {
   const steps = JSON.parse(g.steps) as StoredStep[];
   if (steps.some((s) => 'q' in s && sameQuestion(s.q, q))) return c.json(mysteryState(g, null)); // asked already: free
   const prevUsed = g.used, prevLen = steps.length;
+  if (q.k === 'teammate') q.n = data.players[playerIndex(q.v)!].n;
   steps.push({ q, a });
   g.used++;
   if (g.used >= MYSTERY_MAX) { g.status = 'lost'; g.finished_at = Date.now(); }

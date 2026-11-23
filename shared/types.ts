@@ -204,8 +204,18 @@ export type MysteryNum =
   | 'debut' // first season in a big-5 league (start year)
   | 'seasons' // seasons played in the big 5 since 2000
   | 'worldCups' // World Cups played
-  | 'titles'; // league titles won since 2000
-export const MYSTERY_NUMS: MysteryNum[] = ['age', 'birthYear', 'height', 'caps', 'clubs', 'leagues', 'debut', 'seasons', 'worldCups', 'titles'];
+  | 'titles' // league titles won since 2000
+  | 'euros' | 'copas'
+  | 'tournaments' // World Cups + Euros + Copas played
+  | 'countries' // big-5 countries played in
+  | 'loyalty' // most seasons at a single club
+  | 'lastSeason' // last season in a big-5 league (start year)
+  | 'uclSeasons' // Champions League seasons with his club
+  | 'uclWins'
+  | 'topScorerTimes' // times league top scorer
+  | 'ballonDorTimes'; // times ranked in the Ballon d'Or
+export const MYSTERY_NUMS: MysteryNum[] = ['age', 'birthYear', 'height', 'caps', 'clubs', 'leagues', 'debut', 'seasons', 'worldCups', 'titles',
+  'euros', 'copas', 'tournaments', 'countries', 'loyalty', 'lastSeason', 'uclSeasons', 'uclWins', 'topScorerTimes', 'ballonDorTimes'];
 export type MysteryCmp = 'gt' | 'lt' | 'eq';
 /** A yes/no question about the day's mystery player, built from a guided list (no free text). */
 export type MysteryQuestion =
@@ -227,7 +237,17 @@ export type MysteryQuestion =
   | { k: 'tournament'; v: 'WC' | 'EU' | 'CA'; year?: number; won?: boolean }
   | { k: 'topScorer'; v?: LeagueId }
   | { k: 'ballonDor' }
-  | { k: 'initial'; v: string }; // last word of the name starts with that letter
+  | { k: 'initial'; v: string } // last word of the name starts with that letter
+  | { k: 'firstInitial'; v: string } // first word of the name (several-word names only)
+  | { k: 'mononym' } // known by a single name (Neymar, Kaká)
+  | { k: 'citizen'; v: string } // holds that nationality (any of them)
+  | { k: 'multiPos' } // listed at several positions
+  | { k: 'anyTournament'; won?: boolean } // World Cup, Euro or Copa América
+  | { k: 'teammate'; v: string; n?: string } // n = name, for display; shared a club and a season with that player (Wikidata id)
+  | { k: 'home' } // played in a big-5 league of his own country
+  | { k: 'abroad' } // played in a big-5 league outside his country
+  | { k: 'returned' } // came back to a club he had left
+  | { k: 'lowerDiv'; v?: LeagueId }; // played a season below the top flight with a club of that country (known clubs only)
 export const MYSTERY_MAX = 50; // questions + guesses
 export type MysteryStep = { q: MysteryQuestion; a: boolean } | { guess: string; a: boolean };
 export interface MysteryReveal {

@@ -64,3 +64,32 @@ describe('mystery player pick', () => {
     expect(reveal(a).clubs.length).toBeGreaterThan(0);
   });
 });
+
+describe('more mystery questions', () => {
+  const messi = idx('Lionel Messi');
+  const q = (n: string) => data.players[idx(n)].q;
+  it('answers the extra questions', () => {
+    expect(answer(messi, { k: 'teammate', v: q('Neymar') })).toBe(true);
+    expect(answer(messi, { k: 'teammate', v: q('Kylian Mbappé') })).toBe(true);
+    expect(answer(messi, { k: 'teammate', v: q('Lionel Messi') })).toBe(false);
+    expect(answer(messi, { k: 'teammate', v: 'Q0' })).toBeUndefined();
+    expect(answer(messi, { k: 'home' })).toBe(false);
+    expect(answer(messi, { k: 'abroad' })).toBe(true);
+    expect(answer(idx('Kylian Mbappé'), { k: 'home' })).toBe(true);
+    expect(answer(messi, { k: 'citizen', v: 'ES' })).toBe(true);
+    expect(answer(messi, { k: 'multiPos' })).toBe(true);
+    expect(answer(idx('Neymar'), { k: 'mononym' })).toBe(true);
+    expect(answer(messi, { k: 'mononym' })).toBe(false);
+    expect(answer(messi, { k: 'firstInitial', v: 'L' })).toBe(true);
+    expect(answer(idx('Cristiano Ronaldo'), { k: 'returned' })).toBe(true);
+    expect(answer(messi, { k: 'returned' })).toBe(false);
+    expect(answer(idx('Olivier Giroud'), { k: 'lowerDiv', v: 'L1' })).toBe(true);
+    expect(answer(messi, { k: 'lowerDiv' })).toBe(false);
+    expect(answer(messi, { k: 'anyTournament', won: true })).toBe(true);
+    expect(answer(messi, { k: 'num', f: 'copas', op: 'gt', v: 5 })).toBe(true);
+    expect(answer(messi, { k: 'num', f: 'loyalty', op: 'gt', v: 15 })).toBe(true);
+    expect(answer(messi, { k: 'num', f: 'uclWins', op: 'eq', v: 4 })).toBe(true);
+    expect(answer(messi, { k: 'num', f: 'countries', op: 'eq', v: 2 })).toBe(true);
+    expect(answer(messi, { k: 'num', f: 'lastSeason', op: 'eq', v: 2022 })).toBe(true);
+  });
+});

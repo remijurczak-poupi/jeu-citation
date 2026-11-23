@@ -9,7 +9,8 @@ import type { Continent, LeagueId, Meta, MysteryBoard, MysteryCmp, MysteryHistor
 import { CONTINENTS, MYSTERY_MAX } from '../../shared/types';
 
 // ---------- questions as text ----------
-const YEAR_NUMS: MysteryNum[] = ['birthYear', 'debut'];
+const YEAR_NUMS: MysteryNum[] = ['birthYear', 'debut', 'lastSeason'];
+const SEASON_NUMS: MysteryNum[] = ['debut', 'lastSeason'];
 function leagueLabel(meta: Meta, id: string, lang: Lang) {
   const l = meta.leagues.find((x) => x.id === id);
   return l ? leagueName(l, lang) : id;
@@ -19,7 +20,7 @@ export function questionText(q: MysteryQuestion, t: T, meta: Meta, lang: Lang): 
   switch (q.k) {
     case 'num': {
       const tpl = m.num[q.f]?.[q.op === 'gt' ? 0 : q.op === 'lt' ? 1 : 2] ?? '';
-      return tpl.replace('{v}', q.f === 'debut' ? seasonLabel(q.v) : String(q.v));
+      return tpl.replace('{v}', SEASON_NUMS.includes(q.f) ? seasonLabel(q.v) : String(q.v));
     }
     case 'position': return m.q.position(t.f.positions[q.v]);
     case 'nation': return m.q.nation(`${flag(q.v)} ${countryName(q.v, lang)}`);
@@ -39,15 +40,27 @@ export function questionText(q: MysteryQuestion, t: T, meta: Meta, lang: Lang): 
     case 'topScorer': return m.q.topScorer(q.v ? leagueLabel(meta, q.v, lang) : '');
     case 'ballonDor': return m.q.ballonDor;
     case 'initial': return m.q.initial(q.v);
+    case 'firstInitial': return m.q.firstInitial(q.v);
+    case 'mononym': return m.q.mononym;
+    case 'citizen': return m.q.citizen(`${flag(q.v)} ${countryName(q.v, lang)}`);
+    case 'multiPos': return m.q.multiPos;
+    case 'anyTournament': return q.won ? m.q.anyTournamentWon : m.q.anyTournament;
+    case 'teammate': return m.q.teammate(q.n ?? '…');
+    case 'home': return m.q.home;
+    case 'abroad': return m.q.abroad;
+    case 'returned': return m.q.returned;
+    case 'lowerDiv': return m.q.lowerDiv(q.v ? m.lower[q.v] : '');
   }
 }
 
 // ---------- question builder ----------
-type Param = 'none' | 'num' | 'position' | 'nation' | 'continent' | 'league' | 'leagueOpt' | 'leagueOther' | 'club' | 'season' | 'tournament' | 'letter';
+type Param = 'player' | 'lowerOpt' | 'none' | 'num' | 'position' | 'nation' | 'continent' | 'league' | 'leagueOpt' | 'leagueOther' | 'club' | 'season' | 'tournament' | 'letter';
 interface Tpl { id: string; cat: 'who' | 'career' | 'honours' | 'name'; param: Param; num?: MysteryNum; def?: number; min?: number; max?: number }
 const TEMPLATES: Tpl[] = [
   { id: 'position', cat: 'who', param: 'position' },
+  { id: 'multiPos', cat: 'who', param: 'none' },
   { id: 'nation', cat: 'who', param: 'nation' },
+  { id: 'citizen', cat: 'who', param: 'nation' },
   { id: 'continent', cat: 'who', param: 'continent' },
   { id: 'age', cat: 'who', param: 'num', num: 'age', def: 30, min: 15, max: 60 },
   { id: 'birthYear', cat: 'who', param: 'num', num: 'birthYear', def: 1990, min: 1960, max: 2010 },
@@ -66,19 +79,38 @@ const TEMPLATES: Tpl[] = [
   { id: 'debut', cat: 'career', param: 'num', num: 'debut', def: 2010, min: 2000, max: 2026 },
   { id: 'seasons', cat: 'career', param: 'num', num: 'seasons', def: 10, min: 0, max: 27 },
   { id: 'season', cat: 'career', param: 'season' },
+  { id: 'lastSeason', cat: 'career', param: 'num', num: 'lastSeason', def: 2015, min: 2000, max: 2026 },
+  { id: 'loyalty', cat: 'career', param: 'num', num: 'loyalty', def: 5, min: 0, max: 27 },
+  { id: 'countries', cat: 'career', param: 'num', num: 'countries', def: 1, min: 0, max: 5 },
+  { id: 'home', cat: 'career', param: 'none' },
+  { id: 'abroad', cat: 'career', param: 'none' },
+  { id: 'returned', cat: 'career', param: 'none' },
+  { id: 'lowerDiv', cat: 'career', param: 'lowerOpt' },
+  { id: 'teammate', cat: 'career', param: 'player' },
   { id: 'champion', cat: 'honours', param: 'leagueOpt' },
   { id: 'titles', cat: 'honours', param: 'num', num: 'titles', def: 1, min: 0, max: 20 },
   { id: 'uclPlayed', cat: 'honours', param: 'none' },
   { id: 'uclWon', cat: 'honours', param: 'none' },
+  { id: 'uclSeasons', cat: 'honours', param: 'num', num: 'uclSeasons', def: 5, min: 0, max: 25 },
+  { id: 'uclWins', cat: 'honours', param: 'num', num: 'uclWins', def: 1, min: 0, max: 10 },
+  { id: 'anyTournament', cat: 'honours', param: 'none' },
+  { id: 'anyTournamentWon', cat: 'honours', param: 'none' },
   { id: 'tournament', cat: 'honours', param: 'tournament' },
   { id: 'worldCups', cat: 'honours', param: 'num', num: 'worldCups', def: 1, min: 0, max: 6 },
+  { id: 'euros', cat: 'honours', param: 'num', num: 'euros', def: 1, min: 0, max: 6 },
+  { id: 'copas', cat: 'honours', param: 'num', num: 'copas', def: 1, min: 0, max: 8 },
+  { id: 'tournaments', cat: 'honours', param: 'num', num: 'tournaments', def: 2, min: 0, max: 15 },
   { id: 'topScorer', cat: 'honours', param: 'leagueOpt' },
+  { id: 'topScorerTimes', cat: 'honours', param: 'num', num: 'topScorerTimes', def: 1, min: 0, max: 10 },
   { id: 'ballonDor', cat: 'honours', param: 'none' },
+  { id: 'ballonDorTimes', cat: 'honours', param: 'num', num: 'ballonDorTimes', def: 3, min: 0, max: 20 },
   { id: 'initial', cat: 'name', param: 'letter' },
+  { id: 'firstInitial', cat: 'name', param: 'letter' },
+  { id: 'mononym', cat: 'name', param: 'none' },
 ];
 const CATS = ['who', 'career', 'honours', 'name'] as const;
 
-interface Values { op: MysteryCmp; n: Record<string, number>; pos: Position; nation: string; continent: Continent; league: LeagueId; leagueOpt: LeagueId | ''; leagueOther: LeagueId | 'other'; club: string; season: number; tour: 'WC' | 'EU' | 'CA'; year: string; won: boolean; letter: string }
+interface Values { op: MysteryCmp; n: Record<string, number>; pos: Position; nation: string; continent: Continent; league: LeagueId; leagueOpt: LeagueId | ''; leagueOther: LeagueId | 'other'; club: string; season: number; tour: 'WC' | 'EU' | 'CA'; year: string; won: boolean; letter: string; mate?: { q: string; n: string } }
 
 function build(tpl: Tpl, v: Values): MysteryQuestion {
   switch (tpl.id) {
@@ -101,10 +133,21 @@ function build(tpl: Tpl, v: Values): MysteryQuestion {
     case 'topScorer': return v.leagueOpt ? { k: 'topScorer', v: v.leagueOpt } : { k: 'topScorer' };
     case 'ballonDor': return { k: 'ballonDor' };
     case 'initial': return { k: 'initial', v: v.letter };
+    case 'firstInitial': return { k: 'firstInitial', v: v.letter };
+    case 'mononym': return { k: 'mononym' };
+    case 'citizen': return { k: 'citizen', v: v.nation };
+    case 'multiPos': return { k: 'multiPos' };
+    case 'anyTournament': return { k: 'anyTournament' };
+    case 'anyTournamentWon': return { k: 'anyTournament', won: true };
+    case 'teammate': return { k: 'teammate', v: v.mate?.q ?? '', n: v.mate?.n };
+    case 'home': return { k: 'home' };
+    case 'abroad': return { k: 'abroad' };
+    case 'returned': return { k: 'returned' };
+    case 'lowerDiv': return v.leagueOpt ? { k: 'lowerDiv', v: v.leagueOpt } : { k: 'lowerDiv' };
     default: return { k: 'num', f: tpl.num!, op: v.op, v: v.n[tpl.id] ?? tpl.def! };
   }
 }
-const qKey = (q: MysteryQuestion) => JSON.stringify(q, Object.keys(q).sort());
+const qKey = (q: MysteryQuestion) => { const { n: _n, ...rest } = q as MysteryQuestion & { n?: string }; return JSON.stringify(rest, Object.keys(rest).sort()); };
 
 function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<string>; busy: boolean; onAsk: (q: MysteryQuestion) => void }) {
   const { t, lang } = useI18n();
@@ -119,9 +162,16 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
   const clubs = useMemo(() => [...meta.clubs].map((c) => ({ q: c.q, name: clubName(meta, c.q, lang) })).sort((a, b) => a.name.localeCompare(b.name, lang)), [meta, lang]);
   const nations = useMemo(() => [...meta.nationalities].sort((a, b) => countryName(a, lang).localeCompare(countryName(b, lang), lang)), [meta, lang]);
   const tpl = TEMPLATES.find((x) => x.id === tplId)!;
+  const [mateChoices, setMateChoices] = useState<Suggestion[] | null>(null);
+  const pickMate = async (text: string, pick?: string) => {
+    if (pick) { set({ mate: { q: pick, n: text } }); return; }
+    const list = await api.suggest(text).catch(() => []);
+    if (list.length === 1) set({ mate: { q: list[0].q, n: list[0].n } }); else setMateChoices(list);
+  };
   const club = v.club || clubs[0]?.q || '';
   const q = build(tpl, { ...v, club });
   const already = asked.has(qKey(q));
+  const incomplete = q.k === 'teammate' && !q.v;
   const years = meta.tournaments.find((x) => x.code === v.tour)?.years ?? [];
   const isYear = tpl.num && YEAR_NUMS.includes(tpl.num);
 
@@ -162,6 +212,16 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
         {tpl.param === 'continent' && <div className="mq-ops wrap">{CONTINENTS.map((c) => (
           <button key={c} className={v.continent === c ? 'on' : ''} onClick={() => set({ continent: c })}>{m.continents[c]}</button>
         ))}</div>}
+        {tpl.param === 'player' && <>
+          {v.mate && <p className="mq-mate">✓ {v.mate.n} <button className="link" onClick={() => set({ mate: undefined })}>✕</button></p>}
+          {!v.mate && <GuessInput onGuess={pickMate} suggestions choices={mateChoices} onClearChoices={() => setMateChoices(null)} placeholder={m.matePlaceholder} />}
+        </>}
+        {tpl.param === 'lowerOpt' && (
+          <div className="mq-ops wrap">
+            <button className={v.leagueOpt === '' ? 'on' : ''} onClick={() => set({ leagueOpt: '' })}>{m.any}</button>
+            {meta.leagues.map((l) => <button key={l.id} className={v.leagueOpt === l.id ? 'on' : ''} onClick={() => set({ leagueOpt: l.id })}>{m.lower[l.id]}</button>)}
+          </div>
+        )}
         {(tpl.param === 'league' || tpl.param === 'leagueOpt' || tpl.param === 'leagueOther') && (
           <div className="mq-ops wrap">
             {tpl.param === 'leagueOpt' && <button className={v.leagueOpt === '' ? 'on' : ''} onClick={() => set({ leagueOpt: '' })}>{m.any}</button>}
@@ -202,7 +262,7 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
         )}
       </div>
       <p className="mq-preview">{questionText(q, t, meta, lang)}</p>
-      <button className="primary big" disabled={busy || already} onClick={() => onAsk(q)}>{already ? m.already : m.ask}</button>
+      <button className="primary big" disabled={busy || already || incomplete} onClick={() => onAsk(q)}>{already ? m.already : m.ask}</button>
     </div>
   );
 }

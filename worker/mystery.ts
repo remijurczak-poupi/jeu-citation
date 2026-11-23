@@ -1,6 +1,6 @@
 // Mystery player: second daily game. One hidden player a day, the same for everyone;
 // players ask yes/no questions from a guided list and try to name them in 20 questions or fewer.
-import { clubIndex, data, playerStints } from './data';
+import { clubIndex, data, playerIndex, playerStints } from './data';
 import type { Continent, LeagueId, MysteryNum, MysteryQuestion, MysteryReveal } from '../shared/types';
 import { CONTINENTS, MYSTERY_NUMS } from '../shared/types';
 
@@ -65,8 +65,22 @@ function currentClubs(p: number): number[] {
 }
 const fold = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
 /** First letter of the last word of the displayed name (Kylian Mbappé → M, Neymar → N). */
+const nameWords = (p: number) => data.players[p].n.replace(/\s*\(.*\)\s*/g, ' ').split(/\s+/).filter((w) => /\p{L}/u.test(w));
+/** Home nations count as the United Kingdom (the Premier League's country). */
+const homeCountry = (cc?: string) => (cc?.startsWith('GB') ? 'GB' : cc?.split('-')[0] ?? '');
+/** Same club in the same season, both dated. */
+function teammates(a: number, b: number): boolean {
+  for (const [, ca, sa, ea] of playerStints(a)) {
+    if (sa < 0) continue;
+    for (const [, cb, sb, eb] of playerStints(b)) {
+      if (cb !== ca || sb < 0) continue;
+      if (Math.max(sa, sb) <= Math.min(lastSeason(a, sa, ea), lastSeason(b, sb, eb))) return true;
+    }
+  }
+  return false;
+}
 export function initialOf(p: number): string {
-  const words = data.players[p].n.split(/\s+/).filter((w) => /\p{L}/u.test(w));
+  const words = nameWords(p);
   return fold(words[words.length - 1] ?? '').replace(/[^A-Z]/g, '').charAt(0);
 }
 
@@ -82,6 +96,31 @@ export function numberOf(p: number, f: MysteryNum): number | undefined {
     case 'debut': { const ys = [...bigSeasons(p)]; return ys.length ? Math.min(...ys) : undefined; }
     case 'seasons': return bigSeasons(p).size;
     case 'worldCups': return (pl.t ?? []).filter((t) => t.startsWith('WC')).length;
+    case 'euros': return (pl.t ?? []).filter((t) => t.startsWith('EU')).length;
+    case 'copas': return (pl.t ?? []).filter((t) => t.startsWith('CA')).length;
+    case 'tournaments': return (pl.t ?? []).length;
+    case 'countries': return leaguesOf(p).size; // one big-5 league per country
+    case 'loyalty': {
+      const per = new Map<number, Set<number>>();
+      for (const [, club, s, e] of playerStints(p)) {
+        if (s < 0) continue;
+        const set = per.get(club) ?? per.set(club, new Set()).get(club)!;
+        for (let y = s; y <= lastSeason(p, s, e); y++) set.add(y);
+      }
+      return Math.max(0, ...[...per.values()].map((x) => x.size));
+    }
+    case 'lastSeason': { const ys = [...bigSeasons(p)]; return ys.length ? Math.max(...ys) : undefined; }
+    case 'uclSeasons': case 'uclWins': {
+      const ys = new Set<number>();
+      for (const [, club, s, e] of playerStints(p)) {
+        if (s < 0) continue;
+        const list = (f === 'uclWins' ? data.clubs[club].cw : data.clubs[club].cl) ?? [];
+        for (let y = s; y <= lastSeason(p, s, e); y++) if (list.includes(y)) ys.add(y);
+      }
+      return ys.size;
+    }
+    case 'topScorerTimes': return (pl.ts ?? []).length;
+    case 'ballonDorTimes': return (pl.bd ?? []).length;
     case 'titles': {
       let n = 0;
       for (const [, club, s, e] of playerStints(p)) {
@@ -151,6 +190,48 @@ export function answer(p: number, q: MysteryQuestion): boolean | undefined {
       return !!pl.ts?.some((t) => !q.v || t.startsWith(q.v));
     case 'ballonDor': return !!pl.bd?.length;
     case 'initial': return typeof q.v === 'string' && /^[A-Z]$/.test(q.v) ? initialOf(p) === q.v : undefined;
+    case 'firstInitial': {
+      if (typeof q.v !== 'string' || !/^[A-Z]$/.test(q.v)) return undefined;
+      const words = nameWords(p);
+      return words.length > 1 && fold(words[0]).charAt(0) === q.v;
+    }
+    case 'mononym': return nameWords(p).length === 1;
+    case 'citizen': return typeof q.v === 'string' && /^[A-Z]{2}(-[A-Z0-9]{2,3})?$/.test(q.v) ? !!pl.c?.includes(q.v) : undefined;
+    case 'multiPos': return (pl.p?.length ?? 0) >= 2;
+    case 'anyTournament': return !!(q.won ? pl.w : pl.t)?.length;
+    case 'teammate': {
+      const o = typeof q.v === 'string' ? playerIndex(q.v) : undefined;
+      if (o === undefined) return undefined;
+      return o !== p && teammates(p, o);
+    }
+    case 'home': case 'abroad': {
+      const home = homeCountry(pl.c?.[0]);
+      const countries = [...leaguesOf(p)].map((lg) => data.leagues.find((l) => l.id === lg)!.country);
+      return q.k === 'home' ? countries.includes(home) : countries.some((c) => c !== home);
+    }
+    case 'returned': {
+      const seen: number[] = [];
+      const sorted = playerStints(p).filter((s) => s[2] >= 0).sort((a, b) => a[2] - b[2]);
+      for (let i = 0; i < sorted.length; i++) {
+        const club = sorted[i][1];
+        // Back at a club after playing somewhere else in between.
+        if (seen.includes(club) && sorted[i - 1][1] !== club) return true;
+        seen.push(club);
+      }
+      return false;
+    }
+    case 'lowerDiv': {
+      if (q.v !== undefined && !league(q.v)) return undefined;
+      for (const [, club, s, e] of playerStints(p)) {
+        if (s < 0) continue;
+        const cl = data.clubs[club];
+        const lg = Object.keys(cl.l)[0] as LeagueId | undefined;
+        if (!lg || (q.v && lg !== q.v)) continue;
+        const top = new Set(Object.values(cl.l).flat());
+        for (let y = Math.max(s, data.firstSeason); y <= Math.min(lastSeason(p, s, e), data.currentSeason); y++) if (!top.has(y)) return true;
+      }
+      return false;
+    }
     default: return undefined;
   }
 }
@@ -164,7 +245,7 @@ export function normQ(q: MysteryQuestion): MysteryQuestion {
   if (o.k === 'num') { out.f = o.f; out.op = o.op; }
   if (o.v !== undefined && o.v !== null && o.v !== '') out.v = o.v;
   if (o.k === 'tournament' && o.year !== undefined && o.year !== null && o.year !== '') out.year = Number(o.year);
-  if (o.k === 'tournament' && o.won === true) out.won = true;
+  if ((o.k === 'tournament' || o.k === 'anyTournament') && o.won === true) out.won = true;
   return out as unknown as MysteryQuestion;
 }
 
