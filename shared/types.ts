@@ -190,3 +190,73 @@ export type BoardKind = 'total' | 'best';
 export type BoardPeriod = 'day' | 'week' | 'month' | 'year' | 'all';
 /** "Top 5 % in Ligue 1": share of players with fewer players named (all modes, all time) in that league. */
 export interface Badge { scope: string; top: number; rank: number; total: number }
+
+// ----- Mystery player (second daily game) -----
+/** Continents, from the player's sporting nationality. */
+export type Continent = 'EU' | 'AF' | 'SA' | 'NA' | 'AS' | 'OC';
+export const CONTINENTS: Continent[] = ['EU', 'AF', 'SA', 'NA', 'AS', 'OC'];
+/** Numbers a question can compare ("more than", "less than", "exactly"). */
+export type MysteryNum =
+  | 'age' // this year minus birth year
+  | 'birthYear' | 'height' | 'caps'
+  | 'clubs' // big-5 clubs played for
+  | 'leagues' // big-5 leagues played in
+  | 'debut' // first season in a big-5 league (start year)
+  | 'seasons' // seasons played in the big 5 since 2000
+  | 'worldCups' // World Cups played
+  | 'titles'; // league titles won since 2000
+export const MYSTERY_NUMS: MysteryNum[] = ['age', 'birthYear', 'height', 'caps', 'clubs', 'leagues', 'debut', 'seasons', 'worldCups', 'titles'];
+export type MysteryCmp = 'gt' | 'lt' | 'eq';
+/** A yes/no question about the day's mystery player, built from a guided list (no free text). */
+export type MysteryQuestion =
+  | { k: 'num'; f: MysteryNum; op: MysteryCmp; v: number }
+  | { k: 'position'; v: Position }
+  | { k: 'nation'; v: string } // sporting nationality (first one listed)
+  | { k: 'continent'; v: Continent }
+  | { k: 'dual' } // more than one nationality
+  | { k: 'active' }
+  | { k: 'international' }
+  | { k: 'league'; v: LeagueId } // played in that league
+  | { k: 'club'; v: string } // played for that big-5 club, any time
+  | { k: 'clubNowIn'; v: LeagueId } // played for a club that is in that league this season
+  | { k: 'nowLeague'; v: LeagueId | 'other' } // plays in that league now ('other' = active, outside the big 5)
+  | { k: 'nowClub'; v: string } // plays for that club now
+  | { k: 'season'; v: number } // played in the big 5 in that season (start year)
+  | { k: 'champion'; v?: LeagueId } // league champion (since 2000)
+  | { k: 'ucl'; v: 'played' | 'won' }
+  | { k: 'tournament'; v: 'WC' | 'EU' | 'CA'; year?: number; won?: boolean }
+  | { k: 'topScorer'; v?: LeagueId }
+  | { k: 'ballonDor' }
+  | { k: 'initial'; v: string }; // last word of the name starts with that letter
+export const MYSTERY_MAX = 50; // questions + guesses
+export type MysteryStep = { q: MysteryQuestion; a: boolean } | { guess: string; a: boolean };
+export interface MysteryReveal {
+  q: string; n: string; b?: number; c?: string; p?: Position;
+  clubs: { n: string; from?: number; to?: number }[];
+}
+export interface MysteryState {
+  date: string;
+  number: number;
+  difficulty: 'easy' | 'hard';
+  status: 'active' | 'won' | 'lost';
+  steps: MysteryStep[];
+  used: number;
+  archive: boolean; // past day: not ranked
+  reveal?: MysteryReveal; // once finished
+}
+export interface MysteryInfo {
+  date: string;
+  number: number;
+  difficulty: 'easy' | 'hard';
+  game: MysteryState | null;
+  players: number; // ranked games finished today
+  solved: number;
+}
+export interface MysteryBoard {
+  total: number;
+  lost: number;
+  dist: number[]; // dist[i] = players who found it with i + 1 questions
+  rows: { rank: number; pseudo: string; club: string; country: string; used: number; me?: boolean }[];
+  me: { rank: number; used: number } | null;
+}
+export interface MysteryHistoryItem { date: string; number: number; difficulty: 'easy' | 'hard'; mine: { status: MysteryState['status']; used: number } | null }

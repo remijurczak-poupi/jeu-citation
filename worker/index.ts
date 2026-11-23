@@ -9,8 +9,10 @@ import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
 import { verifyReport, type Verdict } from './verify';
 import { compact } from './normalize';
+import { answer, MYSTERY_EPOCH, mysteryDifficulty, mysteryNumber, normQ, pickMystery, reveal, sameQuestion } from './mystery';
 import type { Challenge, DailyStreak, GameRecap, Badge, BoardKind, BoardPeriod, WarRow, Criterion, DailyHistoryItem, DailyInfo, LeaderboardRow, Meta, Ranking, RoomGame, SoloMode } from '../shared/types';
-import { MODE_RULES, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
+import { MODE_RULES, MYSTERY_MAX, RANKED_THEMES, SOLO_MODES as SOLO_LIST } from '../shared/types';
+import type { MysteryBoard, MysteryHistoryItem, MysteryInfo, MysteryQuestion, MysteryState, MysteryStep } from '../shared/types';
 
 export { Room } from './room';
 
@@ -826,6 +828,178 @@ app.get('/api/rooms/:code', async (c) => {
   const res = await c.env.ROOMS.get(c.env.ROOMS.idFromName(code)).fetch('https://room/info');
   if (!res.ok) throw new HttpError(404, 'room_not_found');
   return c.json(await res.json());
+});
+
+// ---------- mystery player (second daily game) ----------
+interface MysteryRow { device_id: string; date: string; steps: string; used: number; status: 'active' | 'won' | 'lost'; archive: number; started_at: number; finished_at: number | null }
+type StoredStep = MysteryStep & { gq?: string };
+const mysteryToday = () => todayKey();
+function mysteryDate(raw: unknown): string {
+  const today = mysteryToday();
+  if (raw === undefined || raw === null || raw === '') return today;
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw) || raw > today || mysteryNumber(raw) < 1) throw new HttpError(400, 'bad_date');
+  return raw;
+}
+/** The day's player, picked once and stored. */
+async function mysteryPlayer(env: Env, date: string): Promise<number> {
+  let row = await env.DB.prepare('SELECT player FROM mystery_days WHERE date = ?').bind(date).first<{ player: string }>();
+  if (!row) {
+    const used = await env.DB.prepare('SELECT player FROM mystery_days').all<{ player: string }>();
+    const p = pickMystery(date, new Set(used.results.map((r) => r.player)));
+    await env.DB.prepare('INSERT OR IGNORE INTO mystery_days (date, player, difficulty, created_at) VALUES (?, ?, ?, ?)').bind(date, data.players[p].q, mysteryDifficulty(date), Date.now()).run();
+    row = await env.DB.prepare('SELECT player FROM mystery_days WHERE date = ?').bind(date).first<{ player: string }>();
+  }
+  const p = playerIndex(row!.player);
+  if (p === undefined) throw new HttpError(503, 'mystery_unavailable');
+  return p;
+}
+function mysteryState(g: MysteryRow, p: number | null): MysteryState {
+  const steps = (JSON.parse(g.steps) as StoredStep[]).map(({ gq: _gq, ...s }) => s as MysteryStep);
+  return {
+    date: g.date, number: mysteryNumber(g.date), difficulty: mysteryDifficulty(g.date), status: g.status, steps, used: g.used,
+    archive: !!g.archive, ...(g.status !== 'active' && p !== null ? { reveal: reveal(p) } : {}),
+  };
+}
+async function loadMystery(c: C, me: Me, date: string): Promise<MysteryRow> {
+  const found = await c.env.DB.prepare('SELECT * FROM mystery_games WHERE device_id = ? AND date = ?').bind(me.id, date).first<MysteryRow>();
+  if (found) return found;
+  const g: MysteryRow = { device_id: me.id, date, steps: '[]', used: 0, status: 'active', archive: date < mysteryToday() ? 1 : 0, started_at: Date.now(), finished_at: null };
+  await c.env.DB.prepare('INSERT OR IGNORE INTO mystery_games (device_id, date, archive, started_at) VALUES (?, ?, ?, ?)').bind(me.id, date, g.archive, g.started_at).run();
+  return (await c.env.DB.prepare('SELECT * FROM mystery_games WHERE device_id = ? AND date = ?').bind(me.id, date).first<MysteryRow>())!;
+}
+/** Saves only if nobody else wrote in between (two tabs): the step count acts as a version. */
+async function saveMystery(c: C, g: MysteryRow, prevUsed: number, prevLen: number) {
+  const res = await c.env.DB.prepare(
+    `UPDATE mystery_games SET steps = ?, used = ?, status = ?, finished_at = ? WHERE device_id = ? AND date = ? AND used = ? AND json_array_length(steps) = ? AND status = 'active'`,
+  ).bind(g.steps, g.used, g.status, g.finished_at, g.device_id, g.date, prevUsed, prevLen).run();
+  if (!res.meta.changes) throw new HttpError(409, 'conflict');
+}
+
+app.get('/api/mystery', async (c) => {
+  const me = c.get('me');
+  const date = mysteryDate(c.req.query('date'));
+  let game: MysteryState | null = null;
+  if (me) {
+    const g = await c.env.DB.prepare('SELECT * FROM mystery_games WHERE device_id = ? AND date = ?').bind(me.id, date).first<MysteryRow>();
+    if (g) game = mysteryState(g, g.status === 'active' ? null : await mysteryPlayer(c.env, date));
+  }
+  const n = await c.env.DB.prepare(`SELECT COUNT(*) AS n, SUM(status = 'won') AS w FROM mystery_games WHERE date = ? AND archive = 0 AND status != 'active'`).bind(date).first<{ n: number; w: number | null }>();
+  return c.json({ date, number: mysteryNumber(date), difficulty: mysteryDifficulty(date), game, players: n?.n ?? 0, solved: n?.w ?? 0 } satisfies MysteryInfo);
+});
+
+app.post('/api/mystery/ask', async (c) => {
+  const me = requireMe(c);
+  const body = (await c.req.json().catch(() => ({}))) as { date?: string; question?: MysteryQuestion };
+  const date = mysteryDate(body.date);
+  const p = await mysteryPlayer(c.env, date);
+  if (!body.question || typeof body.question !== 'object') throw new HttpError(400, 'bad_question');
+  const q = normQ(body.question);
+  const a = answer(p, q);
+  if (a === undefined) throw new HttpError(400, 'bad_question');
+  const g = await loadMystery(c, me, date);
+  if (g.status !== 'active') return c.json(mysteryState(g, p));
+  const steps = JSON.parse(g.steps) as StoredStep[];
+  if (steps.some((s) => 'q' in s && sameQuestion(s.q, q))) return c.json(mysteryState(g, null)); // asked already: free
+  const prevUsed = g.used, prevLen = steps.length;
+  steps.push({ q, a });
+  g.used++;
+  if (g.used >= MYSTERY_MAX) { g.status = 'lost'; g.finished_at = Date.now(); }
+  g.steps = JSON.stringify(steps);
+  await saveMystery(c, g, prevUsed, prevLen);
+  return c.json(mysteryState(g, g.status === 'active' ? null : p));
+});
+
+app.post('/api/mystery/guess', async (c) => {
+  const me = requireMe(c);
+  const body = (await c.req.json().catch(() => ({}))) as { date?: string; pick?: string; text?: string };
+  const date = mysteryDate(body.date);
+  const p = await mysteryPlayer(c.env, date);
+  let guessed = typeof body.pick === 'string' ? playerIndex(body.pick) : undefined;
+  if (guessed === undefined) {
+    // Free text: only a single clear match counts, otherwise the player picks from the list (not charged).
+    const text = typeof body.text === 'string' ? body.text.slice(0, 80) : '';
+    const options = text.trim().length >= 2 ? suggest(text, 6) : [];
+    const exact = options.filter((o) => compact(data.players[o].n) === compact(text));
+    if (exact.length === 1) guessed = exact[0];
+    else if (options.length === 1) guessed = options[0];
+    else return c.json({ choose: describeList(options) });
+  }
+  const g = await loadMystery(c, me, date);
+  if (g.status !== 'active') return c.json({ state: mysteryState(g, p) });
+  const steps = JSON.parse(g.steps) as StoredStep[];
+  const gq = data.players[guessed].q;
+  if (steps.some((s) => s.gq === gq)) return c.json({ state: mysteryState(g, null) });
+  const prevUsed = g.used, prevLen = steps.length;
+  const right = guessed === p;
+  steps.push({ guess: data.players[guessed].n, a: right, gq });
+  g.used++;
+  if (right) { g.status = 'won'; g.finished_at = Date.now(); }
+  else if (g.used >= MYSTERY_MAX) { g.status = 'lost'; g.finished_at = Date.now(); }
+  g.steps = JSON.stringify(steps);
+  await saveMystery(c, g, prevUsed, prevLen);
+  return c.json({ state: mysteryState(g, g.status === 'active' ? null : p) });
+});
+
+app.post('/api/mystery/giveup', async (c) => {
+  const me = requireMe(c);
+  const body = (await c.req.json().catch(() => ({}))) as { date?: string };
+  const date = mysteryDate(body.date);
+  const p = await mysteryPlayer(c.env, date);
+  const g = await loadMystery(c, me, date);
+  if (g.status === 'active') {
+    const prevLen = (JSON.parse(g.steps) as unknown[]).length;
+    g.status = 'lost'; g.finished_at = Date.now();
+    await saveMystery(c, g, g.used, prevLen);
+  }
+  return c.json(mysteryState(g, p));
+});
+
+app.get('/api/mystery/board', async (c) => {
+  const me = c.get('me');
+  const date = mysteryDate(c.req.query('date'));
+  const res = await c.env.DB.prepare(
+    `SELECT device_id, used, status, finished_at - started_at AS ms FROM mystery_games WHERE date = ? AND archive = 0 AND status != 'active'`,
+  ).bind(date).all<{ device_id: string; used: number; status: string; ms: number }>();
+  const won = res.results.filter((r) => r.status === 'won').sort((a, b) => a.used - b.used || a.ms - b.ms);
+  const dist = new Array(MYSTERY_MAX).fill(0);
+  for (const r of won) dist[Math.min(MYSTERY_MAX, r.used) - 1]++;
+  // Ties on questions share a rank (time only orders the list).
+  const rankOfUsed = (used: number) => won.findIndex((r) => r.used === used) + 1;
+  const top = won.slice(0, 20);
+  const myIdx = me ? won.findIndex((r) => r.device_id === me.id) : -1;
+  const ids = top.map((r) => r.device_id);
+  const profiles = new Map<string, Me>();
+  if (ids.length) {
+    const rows = await c.env.DB.prepare(`SELECT id, pseudo, club, country FROM profiles WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<Me>();
+    for (const p of rows.results) profiles.set(p.id, p);
+  }
+  return c.json({
+    total: res.results.length,
+    lost: res.results.length - won.length,
+    dist,
+    rows: top.map((r) => {
+      const p = profiles.get(r.device_id);
+      return { rank: rankOfUsed(r.used), pseudo: p?.pseudo ?? '?', club: p?.club ?? 'other', country: p?.country ?? '', used: r.used, ...(me && r.device_id === me.id ? { me: true } : {}) };
+    }),
+    me: myIdx >= 0 ? { rank: rankOfUsed(won[myIdx].used), used: won[myIdx].used } : null,
+  } satisfies MysteryBoard);
+});
+
+app.get('/api/mystery/history', async (c) => {
+  const me = c.get('me');
+  const today = mysteryToday();
+  const mine = new Map<string, { status: MysteryState['status']; used: number }>();
+  if (me) {
+    const rows = await c.env.DB.prepare('SELECT date, status, used FROM mystery_games WHERE device_id = ? ORDER BY date DESC LIMIT 60').bind(me.id).all<{ date: string; status: MysteryState['status']; used: number }>();
+    for (const r of rows.results) mine.set(r.date, { status: r.status, used: r.used });
+  }
+  const items: MysteryHistoryItem[] = [];
+  for (let i = 1; i <= 30; i++) {
+    const date = todayKey(Date.parse(today + 'T12:00:00Z') - i * 86400000);
+    if (Date.parse(date + 'T00:00:00Z') < MYSTERY_EPOCH) break;
+    items.push({ date, number: mysteryNumber(date), difficulty: mysteryDifficulty(date), mine: mine.get(date) ?? null });
+  }
+  return c.json(items);
 });
 
 app.all('/api/*', (c) => c.json({ error: 'not_found' }, 404));
