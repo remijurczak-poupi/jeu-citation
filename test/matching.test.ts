@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { boundedDistance, compact, surnameKeys } from '../worker/normalize';
 import { clubIndex, data, getMatcher, matchGuess, scopeSize } from '../worker/data';
-import { dailyCriterion } from '../worker/daily';
+import { drawDailyCriterion } from '../worker/daily';
 import { rarityTiers } from '../worker/rarity';
 import type { Criterion } from '../shared/types';
 
@@ -71,11 +71,11 @@ describe('themes', () => {
 
 describe('daily', () => {
   it('is deterministic and alternates difficulty', () => {
-    const a = dailyCriterion('2026-11-19');
-    expect(dailyCriterion('2026-11-19')).toEqual(a);
+    const a = drawDailyCriterion('2026-11-19');
+    expect(drawDailyCriterion('2026-11-19')).toEqual(a);
     expect(a.difficulty).toBe('easy');
-    expect(dailyCriterion('2026-11-20').difficulty).toBe('hard');
-    for (let d = 20; d < 30; d++) expect(scopeSize(dailyCriterion(`2026-11-${d}`).criterion)).toBeGreaterThanOrEqual(40);
+    expect(drawDailyCriterion('2026-11-20').difficulty).toBe('hard');
+    for (let d = 20; d < 30; d++) expect(scopeSize(drawDailyCriterion(`2026-11-${d}`).criterion)).toBeGreaterThanOrEqual(40);
   });
 });
 

@@ -2,7 +2,7 @@
 import fanClubs from '../src/data/fan-clubs.json';
 import { Hono, type Context } from 'hono';
 import { data, getMatcher, normalizeCriterion, playerIndex, playerStints, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
-import { dailyCriterion, dailyNumber, dailyStreak, todayKey } from './daily';
+import { dailyChallenge, dailyChallenges, dailyNumber, dailyStreak, todayKey } from './daily';
 import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
@@ -304,7 +304,7 @@ app.post('/api/games', async (c) => {
   if (mode === 'daily') {
     const today = todayKey(now);
     const date = body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) && body.date <= today && dailyNumber(body.date) >= 1 ? body.date : today;
-    const { criterion } = dailyCriterion(date);
+    const { criterion } = await dailyChallenge(c.env.DB, date);
     if (date === today) {
       // One ranked attempt per day and per profile.
       const existing = await c.env.DB.prepare('SELECT * FROM games WHERE device_id = ? AND daily_date = ?').bind(me.id, date).first<GameRow>();
@@ -591,7 +591,7 @@ app.post('/api/admin/reports/:id', async (c) => {
 app.get('/api/daily', async (c) => {
   const me = c.get('me');
   const date = todayKey();
-  const { criterion, difficulty } = dailyCriterion(date);
+  const { criterion, difficulty } = await dailyChallenge(c.env.DB, date);
   let played = null;
   if (me) {
     const g = await c.env.DB.prepare('SELECT * FROM games WHERE device_id = ? AND daily_date = ?').bind(me.id, date).first<GameRow>();
@@ -620,10 +620,15 @@ app.get('/api/daily/history', async (c) => {
     const rows = await c.env.DB.prepare('SELECT daily_date, count FROM games WHERE device_id = ? AND daily_date IS NOT NULL ORDER BY daily_date DESC LIMIT 60').bind(me.id).all<{ daily_date: string; count: number }>();
     for (const r of rows.results) mine.set(r.daily_date, r.count);
   }
+  const dates: string[] = [];
   for (let i = 1; i <= 30; i++) {
     const date = todayKey(Date.parse(today + 'T12:00:00Z') - i * 86400000);
     if (dailyNumber(date) < 1) break;
-    const { criterion, difficulty } = dailyCriterion(date);
+    dates.push(date);
+  }
+  const frozen = await dailyChallenges(c.env.DB, dates);
+  for (const date of dates) {
+    const { criterion, difficulty } = frozen.get(date)!;
     items.push({ date, number: dailyNumber(date), criterion, difficulty, myCount: mine.get(date) ?? null });
   }
   return c.json(items);
