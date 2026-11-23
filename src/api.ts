@@ -1,5 +1,5 @@
 // Small API client. The device id + secret identify the player's profile (no account).
-import type { Challenge, GameRecap, ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
+import type { ClubDayBoard, LeagueBoard, LeagueDuration, LeagueSummary, LeagueView, Challenge, GameRecap, ClubStanding, WarMetric, SignInResult, Criterion, DailyHistoryItem, DailyInfo, GameState, GuessOutcome, LeaderboardRow, Meta, Profile, Ranking, RoomGame, SoloMode, Suggestion, WarBoard, Badge, BoardKind, BoardPeriod } from '../shared/types';
 
 export interface Session extends Profile { id: string; secret: string; guest?: boolean }
 
@@ -28,7 +28,7 @@ export function ensureSession(): Promise<void> {
   guestPending ??= call<Session>('POST', '/profile/guest', { lang }).then((s) => setSession({ ...s, guest: true })).finally(() => { guestPending = null; });
   return guestPending;
 }
-const NEEDS_PROFILE = /^\/(games|rooms|challenges)/;
+const NEEDS_PROFILE = /^\/(games|rooms|challenges|leagues)/;
 
 async function call<R>(method: string, path: string, body?: unknown): Promise<R> {
   if (!session && method !== 'GET' && NEEDS_PROFILE.test(path)) await ensureSession();
@@ -63,11 +63,19 @@ export const api = {
   dailyHistory: () => call<DailyHistoryItem[]>('GET', '/daily/history'),
   war: (by: 'club' | 'country', metric: WarMetric, period: string) => call<WarBoard>('GET', `/war?by=${by}&metric=${metric}&period=${period}`),
   club: (q: string) => call<ClubStanding>('GET', `/clubs/${q}`),
-  leaderboard: (p: { mode: SoloMode; kind?: BoardKind; theme?: string; period?: BoardPeriod; ranking?: Ranking; date?: string }) => {
+  clubsOfDay: (date?: string) => call<ClubDayBoard>('GET', '/daily/clubs' + (date ? `?date=${date}` : '')),
+  leagues: () => call<LeagueSummary[]>('GET', '/leagues'),
+  league: (code: string, view: LeagueView, date?: string) => call<LeagueBoard>('GET', `/leagues/${encodeURIComponent(code)}?view=${view}${date ? `&date=${date}` : ''}`),
+  createLeague: (name: string, duration: LeagueDuration) => call<{ code: string }>('POST', '/leagues', { name, duration }),
+  joinLeague: (code: string) => call<{ ok: true; code: string }>('POST', `/leagues/${encodeURIComponent(code)}/join`),
+  leaveLeague: (code: string) => call<{ ok: true }>('POST', `/leagues/${encodeURIComponent(code)}/leave`),
+  deleteLeague: (code: string) => call<{ ok: true }>('DELETE', `/leagues/${encodeURIComponent(code)}`),
+  leaderboard: (p: { mode: SoloMode; kind?: BoardKind; theme?: string; period?: BoardPeriod; ranking?: Ranking; date?: string; club?: string }) => {
     const q = new URLSearchParams({ mode: p.mode, kind: p.kind ?? 'best', ranking: p.ranking ?? 'count' });
     if (p.period) q.set('period', p.period);
     if (p.theme) q.set('theme', p.theme);
     if (p.date) q.set('date', p.date);
+    if (p.club) q.set('club', p.club);
     return call<{ total: number; dist?: { width: number; counts: number[] }; rows: LeaderboardRow[]; me: LeaderboardRow | null }>('GET', '/leaderboard?' + q);
   },
   badges: () => call<Badge[]>('GET', '/badges'),

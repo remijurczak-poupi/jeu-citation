@@ -4,6 +4,7 @@ import { leaveGuarded } from './guard';
 import { loadFanClubs } from './clubs';
 import { dictionaries, I18n, initialLang, LANGS, useI18n, type Lang } from './i18n';
 import { themeLabel } from './format';
+import { DailyBoards, LeaguePage, Leagues } from './leagues';
 import { Badges, ClubPage, Leaderboard, LoginLink, ProfileForm, RankedThemePicker, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
 import { ChallengePage, GameScreen } from './screens/Game';
 import { AdminPage } from './screens/Admin';
@@ -65,13 +66,14 @@ export default function App() {
     { id: 'leaderboards', icon: '🏆', label: t0.nav.boards },
   ];
   const head = route.split('/').filter(Boolean)[0] ?? '';
-  const section = head === 'game' ? '' : head === 'club' ? 'leaderboards' : head;
+  const section = head === 'game' ? '' : head === 'club' || head === 'league' ? 'leaderboards' : head;
   const nav: Nav = { go: useCallback((p: string) => { location.hash = p; }, []) };
   const parts = shown.split('/').filter(Boolean);
 
   let screen;
   if (!meta) screen = null;
   else if (parts[0] === 'club' && parts[1]) screen = <div className="page narrow"><ClubPage meta={meta} q={parts[1]} onSupport={() => (getSession() ? nav.go('/leaderboards') : nav.go('/profile/' + parts[1]))} /></div>;
+  else if (parts[0] === 'league' && parts[1]) screen = <div className="page narrow"><LeaguePage code={parts[1].toUpperCase()} meta={meta} go={nav.go} /></div>;
   else if (parts[0] === 'admin') screen = <div className="page narrow"><AdminPage meta={meta} /></div>;
   else if (parts[0] === 'challenge' && parts[1]) screen = <div className="page narrow"><ChallengePage code={parts[1]} meta={meta} nav={nav} /></div>;
   else if (parts[0] === 'profile' && parts[1]) screen = <div className="page narrow"><ProfileForm meta={meta} presetClub={parts[1]} onDone={() => { setHasProfile(true); nav.go('/leaderboards'); }} /></div>;
@@ -152,7 +154,7 @@ function Home({ meta, nav, dailyOnly }: { meta: Meta; nav: Nav; dailyOnly?: bool
             <>
               <p className="daily-score"><strong>{daily.played.count}</strong> {t.players}{daily.played.rank ? ` · ${t.rank} ${daily.played.rank}/${daily.played.total}` : ''}</p>
               <button onClick={() => nav.go(`/game/${daily.played!.id}`)}>{t.seeResult}</button>
-              <Leaderboard mode="daily" date={daily.date} meta={meta} rarity />
+              <DailyBoards date={daily.date} meta={meta} />
             </>
           ) : (
             <button className="primary big" disabled={busy} onClick={() => (daily.played ? nav.go(`/game/${daily.played.id}`) : playDaily())}>{t.play}</button>
@@ -316,7 +318,11 @@ function Leaderboards({ meta }: { meta: Meta }) {
           ))}
         </div>
         {kind === 'best' && mode !== 'daily' && <RankedThemePicker value={theme} onChange={setTheme} meta={meta} />}
-        <Leaderboard mode={mode} kind={kind} theme={theme} meta={meta} rarity={mode === 'daily'} />
+        {mode === 'daily' && kind === 'best' ? <DailyBoards meta={meta} /> : <Leaderboard mode={mode} kind={kind} theme={theme} meta={meta} rarity={mode === 'daily'} />}
+      </section>
+      <section className="card">
+        <h2>{t.lg.title}</h2>
+        <Leagues go={(p) => { location.hash = p; }} />
       </section>
       <section className="card">
         <h2>{t.war.title}</h2>

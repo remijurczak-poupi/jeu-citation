@@ -244,7 +244,7 @@ function MoreFilters({ meta, value, set, clubs }: { meta: Meta; value: Criterion
  * kind "total": players named over the period in this mode, all themes together.
  * kind "best": best single game, on the daily challenge or a ranked theme (RANKED_THEMES id).
  */
-export function Leaderboard({ mode, kind = 'best', theme, date, meta, rarity }: { mode: SoloMode; kind?: BoardKind; theme?: string; date?: string; meta: Meta | null; rarity?: boolean }) {
+export function Leaderboard({ mode, kind = 'best', theme, date, meta, rarity, club }: { mode: SoloMode; kind?: BoardKind; theme?: string; date?: string; meta: Meta | null; rarity?: boolean; club?: string }) {
   const { t, lang } = useI18n();
   const periods: BoardPeriod[] = kind === 'total' ? ['week', 'month', 'year'] : ['day', 'week', 'all'];
   const [period, setPeriod] = useState<BoardPeriod>(periods[kind === 'total' ? 0 : 2]);
@@ -252,21 +252,13 @@ export function Leaderboard({ mode, kind = 'best', theme, date, meta, rarity }: 
   const [ranking, setRanking] = useState<Ranking>('count');
   const [data, setData] = useState<{ total: number; dist?: { width: number; counts: number[] }; rows: LeaderboardRow[]; me: LeaderboardRow | null } | null>(null);
   const daily = mode === 'daily' && kind === 'best';
-  const key = JSON.stringify([mode, kind, theme, date, period, ranking]);
+  const key = JSON.stringify([mode, kind, theme, date, period, ranking, club]);
   useEffect(() => {
     let alive = true;
     setData(null);
-    api.leaderboard({ mode, kind, theme, date, period, ranking }).then((d) => alive && setData(d)).catch(() => alive && setData({ total: 0, rows: [], me: null }));
+    api.leaderboard({ mode, kind, theme, date, period, ranking, club }).then((d) => alive && setData(d)).catch(() => alive && setData({ total: 0, rows: [], me: null }));
     return () => { alive = false; };
   }, [key]);
-  const row = (r: LeaderboardRow) => (
-    <li key={r.rank + r.pseudo} className={r.me ? 'me' : ''}>
-      <span className="lb-rank">{r.rank}</span>
-      <span className="lb-flag" title={countryName(r.country, lang)}>{flag(r.country)}</span>
-      <span className="lb-name">{r.pseudo}{r.me && <em> ({t.you})</em>}<small>{clubName(meta, r.club, lang, t)}</small></span>
-      <span className="lb-score">{r.score}</span>
-    </li>
-  );
   return (
     <div className="leaderboard">
       <div className="tabs">
@@ -276,13 +268,28 @@ export function Leaderboard({ mode, kind = 'best', theme, date, meta, rarity }: 
       </div>
       {ranking === 'rarity' && <p className="hint">{t.rarityHint}</p>}
       {data && data.total > 0 && <Standing total={data.total} me={data.me} dist={data.dist} />}
-      {!data ? <p className="hint">…</p> : data.rows.length === 0 ? <p className="hint">{t.noScores}</p> : (
-        <ol>
-          {data.rows.map(row)}
-          {data.me && !data.rows.some((r) => r.me) && <><li className="sep">…</li>{row(data.me)}</>}
-        </ol>
-      )}
+      {!data ? <p className="hint">…</p> : <ScoreList rows={data.rows} me={data.me} meta={meta} />}
     </div>
+  );
+}
+
+/** Ranked players (top rows, then mine if I'm further down). */
+export function ScoreList({ rows, me, meta, empty }: { rows: LeaderboardRow[]; me: LeaderboardRow | null; meta: Meta | null; empty?: string }) {
+  const { t, lang } = useI18n();
+  const row = (r: LeaderboardRow) => (
+    <li key={r.rank + r.pseudo} className={r.me ? 'me' : ''}>
+      <span className="lb-rank">{r.rank}</span>
+      <span className="lb-flag" title={countryName(r.country, lang)}>{flag(r.country)}</span>
+      <span className="lb-name">{r.pseudo}{r.me && <em> ({t.you})</em>}<small>{clubName(meta, r.club, lang, t)}</small></span>
+      <span className="lb-score">{r.score}</span>
+    </li>
+  );
+  if (rows.length === 0) return <p className="hint">{empty ?? t.noScores}</p>;
+  return (
+    <ol>
+      {rows.map(row)}
+      {me && !rows.some((r) => r.me) && <><li className="sep">…</li>{row(me)}</>}
+    </ol>
   );
 }
 
@@ -304,7 +311,7 @@ export function topShareValue(rank: number, total: number, lang: string) {
 }
 
 /** My rank, my percentile and how all players' scores spread out, with my bracket highlighted. */
-function Standing({ total, me, dist }: { total: number; me: LeaderboardRow | null; dist?: { width: number; counts: number[] } }) {
+export function Standing({ total, me, dist, caption }: { total: number; me: Pick<LeaderboardRow, 'rank' | 'score'> | null; dist?: { width: number; counts: number[] }; caption?: string }) {
   const { t, lang } = useI18n();
   const [hover, setHover] = useState<number | null>(null);
   const counts = dist?.counts ?? [];
@@ -323,7 +330,7 @@ function Standing({ total, me, dist }: { total: number; me: LeaderboardRow | nul
       )}
       {counts.length > 1 && (
         <figure className="dist">
-          <figcaption>{t.distTitle}</figcaption>
+          <figcaption>{caption ?? t.distTitle}</figcaption>
           <svg viewBox={`0 0 ${W} ${H + 16}`} role="img" aria-label={t.distTitle} onMouseLeave={() => setHover(null)}>
             <line x1="0" x2={W} y1={H} y2={H} className="dist-axis" />
             {counts.map((n, i) => {
@@ -632,6 +639,8 @@ export function ClubPage({ meta, q, onSupport }: { meta: Meta; q: string; onSupp
         </div>
       )}
       <p className="hint">{t.war.clubPageHint}</p>
+      <h3>{t.lg.clubDayTitle}</h3>
+      <Leaderboard mode="daily" meta={meta} rarity club={q} />
       {mine ? <><p className="ok-note">✓ {t.war.youSupport}</p><ShareClub q={q} name={name} /></> : (
         <button className="primary big" disabled={busy} onClick={support}>{t.war.supportButton(name)}</button>
       )}
