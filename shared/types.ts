@@ -239,8 +239,7 @@ export type MysteryQuestion =
   | { k: 'tournament'; v: 'WC' | 'EU' | 'CA'; year?: number; won?: boolean }
   | { k: 'topScorer'; v?: LeagueId }
   | { k: 'ballonDor' }
-  | { k: 'initial'; v: string } // last word of the name starts with that letter
-  | { k: 'firstInitial'; v: string } // first word of the name (several-word names only)
+  // Name initials are hints only (10 questions each), not questions.
   | { k: 'mononym' } // known by a single name (Neymar, Kaká)
   | { k: 'citizen'; v: string } // holds that nationality (any of them)
   | { k: 'multiPos' } // listed at several positions

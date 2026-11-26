@@ -257,12 +257,6 @@ export function answer(p: number, q: MysteryQuestion): boolean | undefined {
       if (q.v !== undefined && !league(q.v)) return undefined;
       return !!pl.ts?.some((t) => !q.v || t.startsWith(q.v));
     case 'ballonDor': return !!pl.bd?.length;
-    case 'initial': return typeof q.v === 'string' && /^[A-Z]$/.test(q.v) ? initialOf(p) === q.v : undefined;
-    case 'firstInitial': {
-      if (typeof q.v !== 'string' || !/^[A-Z]$/.test(q.v)) return undefined;
-      const words = nameWords(p);
-      return words.length > 1 && fold(words[0]).charAt(0) === q.v;
-    }
     case 'mononym': return nameWords(p).length === 1;
     case 'citizen': return typeof q.v === 'string' && /^[A-Z]{2}(-[A-Z0-9]{2,3})?$/.test(q.v) ? !!pl.c?.includes(q.v) : undefined;
     case 'multiPos': return (pl.p?.length ?? 0) >= 2;

@@ -17,7 +17,7 @@ describe('mystery player answers', () => {
     expect(answer(mbappe, { k: 'position', v: 'FW' })).toBe(true);
     expect(answer(mbappe, { k: 'num', f: 'birthYear', op: 'eq', v: 1998 })).toBe(true);
     expect(answer(mbappe, { k: 'num', f: 'height', op: 'gt', v: 180 })).toBe(false);
-    expect(answer(mbappe, { k: 'initial', v: 'M' })).toBe(true);
+    expect(answer(mbappe, { k: 'initial', v: 'M' } as never)).toBeUndefined(); // initials are hints only
     expect(initialOf(idx('Ronaldo'))).toBe('R');
   });
   it('answers career questions', () => {
@@ -80,7 +80,6 @@ describe('more mystery questions', () => {
     expect(answer(messi, { k: 'multiPos' })).toBe(true);
     expect(answer(idx('Neymar'), { k: 'mononym' })).toBe(true);
     expect(answer(messi, { k: 'mononym' })).toBe(false);
-    expect(answer(messi, { k: 'firstInitial', v: 'L' })).toBe(true);
     expect(answer(idx('Cristiano Ronaldo'), { k: 'returned' })).toBe(true);
     expect(answer(messi, { k: 'returned' })).toBe(false);
     expect(answer(idx('Olivier Giroud'), { k: 'lowerDiv', v: 'L1' })).toBe(true);

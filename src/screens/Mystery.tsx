@@ -55,8 +55,6 @@ export function questionText(q: MysteryQuestion, t: T, meta: Meta, lang: Lang): 
     case 'tournament': return m.q.tournament(q.v, `${t.f.tournaments[q.v] ?? q.v}${q.year ? ' ' + q.year : ''}`, !!q.won);
     case 'topScorer': return m.q.topScorer(q.v ? leagueLabel(meta, q.v, lang) : '');
     case 'ballonDor': return m.q.ballonDor;
-    case 'initial': return m.q.initial(q.v);
-    case 'firstInitial': return m.q.firstInitial(q.v);
     case 'mononym': return m.q.mononym;
     case 'citizen': return m.q.citizen(`${flag(q.v)} ${countryName(q.v, lang)}`);
     case 'multiPos': return m.q.multiPos;
@@ -108,8 +106,8 @@ function Hints({ g, busy, onHint }: { g: MysteryState | null; busy: boolean; onH
 }
 
 // ---------- question builder ----------
-type Param = 'clubCountry' | 'birthCountry' | 'player' | 'lowerOpt' | 'none' | 'num' | 'position' | 'nation' | 'continent' | 'league' | 'leagueOpt' | 'leagueOther' | 'club' | 'season' | 'tournament' | 'letter';
-interface Tpl { id: string; cat: 'who' | 'career' | 'clubs' | 'world' | 'honours' | 'name'; param: Param; num?: MysteryNum; def?: number; min?: number; max?: number }
+type Param = 'clubCountry' | 'birthCountry' | 'player' | 'lowerOpt' | 'none' | 'num' | 'position' | 'nation' | 'continent' | 'league' | 'leagueOpt' | 'leagueOther' | 'club' | 'season' | 'tournament';
+interface Tpl { id: string; cat: 'who' | 'career' | 'clubs' | 'world' | 'honours'; param: Param; num?: MysteryNum; def?: number; min?: number; max?: number }
 const TEMPLATES: Tpl[] = [
   { id: 'position', cat: 'who', param: 'position' },
   { id: 'multiPos', cat: 'who', param: 'none' },
@@ -169,13 +167,11 @@ const TEMPLATES: Tpl[] = [
   { id: 'topScorerTimes', cat: 'honours', param: 'num', num: 'topScorerTimes', def: 1, min: 0, max: 10 },
   { id: 'ballonDor', cat: 'honours', param: 'none' },
   { id: 'ballonDorTimes', cat: 'honours', param: 'num', num: 'ballonDorTimes', def: 3, min: 0, max: 20 },
-  { id: 'initial', cat: 'name', param: 'letter' },
-  { id: 'firstInitial', cat: 'name', param: 'letter' },
-  { id: 'mononym', cat: 'name', param: 'none' },
+  { id: 'mononym', cat: 'who', param: 'none' },
 ];
-const CATS = ['who', 'career', 'clubs', 'world', 'honours', 'name'] as const;
+const CATS = ['who', 'career', 'clubs', 'world', 'honours'] as const;
 
-interface Values { op: MysteryCmp; n: Record<string, number>; pos: Position; nation: string; continent: Continent; league: LeagueId; leagueOpt: LeagueId | ''; leagueOther: LeagueId | 'other'; club: string; season: number; tour: 'WC' | 'EU' | 'CA'; year: string; won: boolean; letter: string; mate?: { q: string; n: string }; country: string; bornIn: string }
+interface Values { op: MysteryCmp; n: Record<string, number>; pos: Position; nation: string; continent: Continent; league: LeagueId; leagueOpt: LeagueId | ''; leagueOther: LeagueId | 'other'; club: string; season: number; tour: 'WC' | 'EU' | 'CA'; year: string; won: boolean; mate?: { q: string; n: string }; country: string; bornIn: string }
 
 function build(tpl: Tpl, v: Values): MysteryQuestion {
   switch (tpl.id) {
@@ -197,8 +193,6 @@ function build(tpl: Tpl, v: Values): MysteryQuestion {
     case 'tournament': return { k: 'tournament', v: v.tour, ...(v.year ? { year: +v.year } : {}), ...(v.won ? { won: true } : {}) };
     case 'topScorer': return v.leagueOpt ? { k: 'topScorer', v: v.leagueOpt } : { k: 'topScorer' };
     case 'ballonDor': return { k: 'ballonDor' };
-    case 'initial': return { k: 'initial', v: v.letter };
-    case 'firstInitial': return { k: 'firstInitial', v: v.letter };
     case 'mononym': return { k: 'mononym' };
     case 'citizen': return { k: 'citizen', v: v.nation };
     case 'multiPos': return { k: 'multiPos' };
@@ -230,7 +224,7 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
   const [tplId, setTplId] = useState('position');
   const [v, setV] = useState<Values>({
     op: 'gt', n: {}, pos: 'FW', nation: meta.nationalities[0] ?? 'FR', continent: 'EU', league: 'PL', leagueOpt: '', leagueOther: 'PL',
-    club: '', season: meta.currentSeason - 1, tour: 'WC', year: '', won: false, letter: 'M', country: 'PT', bornIn: 'FR',
+    club: '', season: meta.currentSeason - 1, tour: 'WC', year: '', won: false, country: 'PT', bornIn: 'FR',
   });
   const set = (p: Partial<Values>) => setV((x) => ({ ...x, ...p }));
   const mm = useMysteryMeta();
@@ -346,11 +340,6 @@ function QuestionBuilder({ meta, asked, busy, onAsk }: { meta: Meta; asked: Set<
             <label className="mq-check"><input type="checkbox" checked={v.won} onChange={(e) => set({ won: e.target.checked })} /> {m.wonIt}</label>
           </div>
         </>}
-        {tpl.param === 'letter' && (
-          <div className="mq-letters">{'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((x) => (
-            <button key={x} className={v.letter === x ? 'on' : ''} onClick={() => set({ letter: x })}>{x}</button>
-          ))}</div>
-        )}
       </div>
       <p className="mq-preview">{questionText(q, t, meta, lang)}</p>
       <button className="primary big" disabled={busy || already || incomplete} onClick={() => onAsk(q)}>{already ? m.already : m.ask}</button>
