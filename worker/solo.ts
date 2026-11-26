@@ -12,6 +12,8 @@ import { MODE_RULES, type ChainLink, type Criterion, type GameState, type GuessO
 
 export const GRACE_MS = 2500; // network latency allowance after the timer ends
 export const MIN_GUESS_INTERVAL_MS = 150;
+/** Ranked daily challenge: a human needs more than half a second per name, a script does not. */
+export const MIN_DAILY_GUESS_INTERVAL_MS = 500;
 export const MAX_GUESSES = 2000;
 
 export interface GameRow {
@@ -77,7 +79,8 @@ function withAccepted(m: Matcher, accepted: number[]): Matcher {
 export function applyGuess(g: GameRow, text: string, now: number, pick?: string, accepted: number[] = []): { outcome: GuessOutcome; changed: boolean } {
   if (expire(g, now)) return { outcome: { status: 'invalid' }, changed: true };
   if (g.status !== 'active') return { outcome: { status: 'invalid' }, changed: false };
-  if ((g.guesses > 0 && now - g.last_at < MIN_GUESS_INTERVAL_MS) || g.guesses >= MAX_GUESSES) return { outcome: { status: 'invalid' }, changed: false };
+  const minInterval = g.daily_date ? MIN_DAILY_GUESS_INTERVAL_MS : MIN_GUESS_INTERVAL_MS;
+  if ((g.guesses > 0 && now - g.last_at < minInterval) || g.guesses >= MAX_GUESSES) return { outcome: { status: 'invalid' }, changed: false };
   const rules = MODE_RULES[g.mode];
   const found: string[] = JSON.parse(g.found);
   const cited = new Set(found.map(playerByQ).filter((p): p is number => p !== undefined));
@@ -118,6 +121,20 @@ export function finish(g: GameRow, now: number) {
 }
 
 export const scoreOf = (g: GameRow) => g.count;
+
+/**
+ * A score no human could reach: more than SUSPECT_PER_MINUTE right answers a minute, over at least
+ * SUSPECT_MIN_COUNT answers. Typing (even with suggestions) tops out well below; a script does not.
+ * Such scores stay out of every ranking until the admin clears them (/#/admin).
+ */
+export const SUSPECT_MIN_COUNT = 40;
+export const SUSPECT_PER_MINUTE = 45;
+export function isSuspect(count: number, startedAt: number, lastAt: number): boolean {
+  if (count < SUSPECT_MIN_COUNT) return false;
+  const minutes = Math.max(lastAt - startedAt, 1) / 60_000;
+  return count / minutes > SUSPECT_PER_MINUTE;
+}
+
 
 export function toState(g: GameRow, now: number, extra?: Partial<GameState>): GameState {
   const found: string[] = JSON.parse(g.found);
