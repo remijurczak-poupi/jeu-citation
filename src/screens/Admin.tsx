@@ -26,6 +26,7 @@ async function admin<R>(method: string, path: string, key: string, body?: unknow
 
 export function AdminPage({ meta }: { meta: Meta }) {
   const [key, setKey] = useState(readKey);
+  const [section, setSection] = useState<'reports' | 'suspects'>('reports');
   const [draft, setDraft] = useState('');
   const [tab, setTab] = useState<'open' | 'closed'>('open');
   const [rows, setRows] = useState<ReportRow[] | null>(null);
@@ -38,7 +39,7 @@ export function AdminPage({ meta }: { meta: Meta }) {
       if (e.message === 'bad_admin_key') { setKey(''); try { localStorage.removeItem(KEY); } catch { /* ignore */ } }
     });
   };
-  useEffect(load, [key, tab]);
+  useEffect(() => { if (section === 'reports') load(); }, [key, tab, section]);
 
   if (!key) return (
     <div className="card admin">
@@ -53,6 +54,11 @@ export function AdminPage({ meta }: { meta: Meta }) {
   );
   return (
     <div className="card admin">
+      <div className="tabs">
+        <button className={section === 'reports' ? 'on' : ''} onClick={() => setSection('reports')}>Signalements</button>
+        <button className={section === 'suspects' ? 'on' : ''} onClick={() => setSection('suspects')}>Scores suspects</button>
+      </div>
+      {section === 'suspects' ? <Suspects meta={meta} adminKey={key} /> : <>
       <h2>Signalements</h2>
       <div className="tabs">
         <button className={tab === 'open' ? 'on' : ''} onClick={() => setTab('open')}>À traiter</button>
@@ -62,6 +68,7 @@ export function AdminPage({ meta }: { meta: Meta }) {
       {!rows ? <p className="hint">…</p> : rows.length === 0 ? <p className="hint">Aucun signalement.</p> : (
         <ul className="reports">{rows.map((r) => <ReportItem key={r.id} r={r} meta={meta} adminKey={key} onDone={load} />)}</ul>
       )}
+      </>}
     </div>
   );
 }
@@ -108,5 +115,49 @@ function ReportItem({ r, meta, adminKey, onDone }: { r: ReportRow; meta: Meta; a
         <div className="row"><span className={`pill ${r.status.endsWith('accepted') ? 'easy' : 'hard'}`}>{STATUS[r.status] ?? r.status}</span><button className="link" disabled={busy} onClick={() => act('reopen')}>Rouvrir</button></div>
       )}
     </li>
+  );
+}
+
+interface SuspectRow { game_id: string; mode: string; count: number; errors: number; seconds: number; created_at: number; flag: string; criterion: Criterion; pseudo: string | null }
+const FLAG: Record<string, string> = { cleared: 'Validé', removed: 'Retiré (triche)' };
+
+/** Scores no human could reach (too many answers a minute), kept out of the rankings until reviewed. */
+function Suspects({ meta, adminKey }: { meta: Meta; adminKey: string }) {
+  const { t, lang } = useI18n();
+  const [tab, setTab] = useState<'open' | 'closed'>('open');
+  const [rows, setRows] = useState<SuspectRow[] | null>(null);
+  const [error, setError] = useState('');
+  const load = () => { setRows(null); setError(''); admin<SuspectRow[]>('GET', `/suspects?status=${tab}`, adminKey).then(setRows).catch(() => setError('Erreur serveur.')); };
+  useEffect(load, [tab]);
+  const act = async (id: string, action: string) => { await admin('POST', `/suspects/${id}`, adminKey, { action }).catch(() => setError('Erreur serveur.')); load(); };
+  return (
+    <>
+      <h2>Scores suspects</h2>
+      <p className="hint">Parties avec plus de 45 bonnes réponses par minute : hors classement tant que tu n’as pas décidé. Le joueur ne voit rien.</p>
+      <div className="tabs">
+        <button className={tab === 'open' ? 'on' : ''} onClick={() => setTab('open')}>À traiter</button>
+        <button className={tab === 'closed' ? 'on' : ''} onClick={() => setTab('closed')}>Traités</button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {!rows ? <p className="hint">…</p> : rows.length === 0 ? <p className="hint">Aucun score suspect.</p> : (
+        <ul className="reports">{rows.map((r) => (
+          <li key={r.game_id} className="report-item">
+            <div className="report-head">
+              <strong>{r.count} joueurs en {Math.floor(r.seconds / 60)} min {r.seconds % 60} s</strong>
+              <small>{new Date(r.created_at).toLocaleString(lang)} · {r.pseudo ?? '?'}</small>
+            </div>
+            <p className="hint">Mode : {r.mode} · Thème : {themeLabel(r.criterion, meta, lang, t)} · {r.errors} erreur(s) · {Math.round((r.count * 60) / Math.max(r.seconds, 1))} par minute</p>
+            {tab === 'open' ? (
+              <div className="row">
+                <button className="primary" onClick={() => act(r.game_id, 'clear')}>C’est un humain : remettre au classement</button>
+                <button onClick={() => act(r.game_id, 'remove')}>Triche : retirer</button>
+              </div>
+            ) : (
+              <div className="row"><span className={`pill ${r.flag === 'cleared' ? 'easy' : 'hard'}`}>{FLAG[r.flag] ?? r.flag}</span><button className="link" onClick={() => act(r.game_id, 'reopen')}>Rouvrir</button></div>
+            )}
+          </li>
+        ))}</ul>
+      )}
+    </>
   );
 }

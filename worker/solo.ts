@@ -122,6 +122,20 @@ export function finish(g: GameRow, now: number) {
 
 export const scoreOf = (g: GameRow) => g.count;
 
+/**
+ * A score no human could reach: more than SUSPECT_PER_MINUTE right answers a minute, over at least
+ * SUSPECT_MIN_COUNT answers. Typing (even with suggestions) tops out well below; a script does not.
+ * Such scores stay out of every ranking until the admin clears them (/#/admin).
+ */
+export const SUSPECT_MIN_COUNT = 40;
+export const SUSPECT_PER_MINUTE = 45;
+export function isSuspect(count: number, startedAt: number, lastAt: number): boolean {
+  if (count < SUSPECT_MIN_COUNT) return false;
+  const minutes = Math.max(lastAt - startedAt, 1) / 60_000;
+  return count / minutes > SUSPECT_PER_MINUTE;
+}
+
+
 export function toState(g: GameRow, now: number, extra?: Partial<GameState>): GameState {
   const found: string[] = JSON.parse(g.found);
   return {

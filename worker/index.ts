@@ -3,7 +3,7 @@ import fanClubs from '../src/data/fan-clubs.json';
 import { Hono, type Context } from 'hono';
 import { data, getMatcher, normalizeCriterion, playerIndex, playerStints, scopeSize, criterionKey, rankedThemeId, suggest, describeList } from './data';
 import { dailyCriterion, dailyNumber, dailyStreak, todayKey } from './daily';
-import { applyGuess, boardKey, finish, newGame, scoreOf, toState, expire, type GameRow } from './solo';
+import { applyGuess, boardKey, finish, isSuspect, newGame, scoreOf, toState, expire, type GameRow } from './solo';
 import { ROOM_LIMITS } from './room';
 import { rarityTiers } from './rarity';
 import { chainStart } from './chain';
@@ -291,13 +291,17 @@ async function saveGame(c: C, g: GameRow, prevVersion: number, wasActive: boolea
     const theme = criterionKey(JSON.parse(g.criterion));
     const found: string[] = JSON.parse(g.found);
     const stmts = [
-      c.env.DB.prepare('INSERT OR IGNORE INTO scores (game_id, device_id, board_key, score, count, created_at, mode, league) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(g.id, g.device_id, g.board_key, scoreOf(g), g.count, g.last_at, g.board_key.startsWith('archive:') ? 'archive' : g.mode, (JSON.parse(g.criterion) as Criterion).league ?? null),
+      c.env.DB.prepare('INSERT OR IGNORE INTO scores (game_id, device_id, board_key, score, count, created_at, mode, league, flag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(g.id, g.device_id, g.board_key, scoreOf(g), g.count, g.last_at, g.board_key.startsWith('archive:') ? 'archive' : g.mode, (JSON.parse(g.criterion) as Criterion).league ?? null,
+          isSuspect(g.count, g.started_at, g.last_at) ? 'suspect' : null),
       ...found.map((q) => c.env.DB.prepare('INSERT INTO citations (theme_key, player, n) VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET n = n + 1').bind(theme, q)),
     ];
     for (let i = 0; i < stmts.length; i += 100) await c.env.DB.batch(stmts.slice(i, i + 100));
   }
 }
+
+/** SQL condition: the score counts in rankings (not set aside, not removed). */
+const RANKED = "(flag IS NULL OR flag = 'cleared')";
 
 /** Best-game boards exist for the daily challenge and the big themes only. */
 const isRankedBoard = (g: GameRow) => g.daily_date !== null || (g.mode !== 'daily' && rankedThemeId(JSON.parse(g.criterion)) !== undefined);
@@ -305,7 +309,7 @@ const isRankedBoard = (g: GameRow) => g.daily_date !== null || (g.mode !== 'dail
 async function rankOf(c: C, g: GameRow) {
   if (g.status !== 'finished' || !isRankedBoard(g)) return {};
   const row = await c.env.DB.prepare(
-    `WITH best AS (SELECT device_id, MAX(score) AS s FROM scores WHERE board_key = ? GROUP BY device_id)
+    `WITH best AS (SELECT device_id, MAX(score) AS s FROM scores WHERE board_key = ? AND ${RANKED} GROUP BY device_id)
      SELECT (SELECT COUNT(*) FROM best WHERE s > ?) + 1 AS rank, (SELECT COUNT(*) FROM best) AS total`,
   ).bind(g.board_key, scoreOf(g)).first<{ rank: number; total: number }>();
   return row ? { rank: row.rank, total: row.total } : {};
@@ -622,6 +626,28 @@ app.post('/api/admin/reports/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------- admin: scores set aside ----------
+app.get('/api/admin/suspects', async (c) => {
+  requireAdmin(c);
+  const status = c.req.query('status') === 'closed' ? 'closed' : 'open';
+  const rows = await c.env.DB.prepare(
+    `SELECT s.game_id, s.board_key, s.mode, s.count, s.created_at, s.flag, g.started_at, g.last_at, g.criterion, g.errors, p.pseudo
+     FROM scores s JOIN games g ON g.id = s.game_id LEFT JOIN profiles p ON p.id = s.device_id
+     WHERE ${status === 'open' ? "s.flag = 'suspect'" : "s.flag IN ('cleared', 'removed')"} ORDER BY s.created_at DESC LIMIT 200`,
+  ).all<{ game_id: string; board_key: string; mode: string; count: number; created_at: number; flag: string; started_at: number; last_at: number; criterion: string; errors: number; pseudo: string | null }>();
+  return c.json(rows.results.map(({ criterion, ...r }) => ({ ...r, criterion: JSON.parse(criterion) as Criterion, seconds: Math.round((r.last_at - r.started_at) / 1000) })));
+});
+
+app.post('/api/admin/suspects/:game', async (c) => {
+  requireAdmin(c);
+  const { action } = (await c.req.json().catch(() => ({}))) as { action?: string };
+  const flag = action === 'clear' ? 'cleared' : action === 'remove' ? 'removed' : action === 'reopen' ? 'suspect' : null;
+  if (!flag) throw new HttpError(400, 'bad_action');
+  const res = await c.env.DB.prepare('UPDATE scores SET flag = ? WHERE game_id = ? AND flag IS NOT NULL').bind(flag, c.req.param('game')).run();
+  if (!res.meta.changes) throw new HttpError(404, 'score_not_found');
+  return c.json({ ok: true });
+});
+
 // ---------- daily ----------
 app.get('/api/daily', async (c) => {
   const me = c.get('me');
@@ -637,7 +663,7 @@ app.get('/api/daily', async (c) => {
       played = toState(g, now, await rankOf(c, g));
     }
   }
-  const n = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM scores WHERE board_key = ?').bind(`daily:${date}`).first<{ n: number }>();
+  const n = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM scores WHERE board_key = ? AND ${RANKED}`).bind(`daily:${date}`).first<{ n: number }>();
   let streak: DailyStreak | undefined;
   if (me) {
     const rows = await c.env.DB.prepare('SELECT daily_date AS d FROM games WHERE device_id = ? AND daily_date IS NOT NULL ORDER BY daily_date').bind(me.id).all<{ d: string }>();
@@ -680,19 +706,20 @@ app.get('/api/leaderboard', async (c) => {
 
   let rows: { device_id: string; score: number }[];
   if (ranking === 'rarity') {
-    const games = await c.env.DB.prepare(`SELECT device_id, found FROM games WHERE daily_date = ? AND status = 'finished'`).bind(date).all<{ device_id: string; found: string }>();
+    const games = await c.env.DB.prepare(`SELECT device_id, found FROM games WHERE daily_date = ? AND status = 'finished'
+       AND id NOT IN (SELECT game_id FROM scores WHERE flag IN ('suspect', 'removed'))`).bind(date).all<{ device_id: string; found: string }>();
     const founds = games.results.map((g) => JSON.parse(g.found) as string[]);
     const tiers = rarityTiers(founds);
     rows = games.results.map((g, i) => ({ device_id: g.device_id, score: founds[i].reduce((s, q2) => s + (tiers.get(q2) ?? 1), 0) }));
   } else if (kind === 'total') {
     // Players named over the period in this mode, whatever the theme.
     const res = await c.env.DB.prepare(
-      `SELECT device_id, SUM(count) AS score FROM scores WHERE mode = ? AND created_at >= ? GROUP BY device_id`,
+      `SELECT device_id, SUM(count) AS score FROM scores WHERE mode = ? AND created_at >= ? AND ${RANKED} GROUP BY device_id`,
     ).bind(mode, since).all<{ device_id: string; score: number }>();
     rows = res.results;
   } else {
     const res = await c.env.DB.prepare(
-      `SELECT device_id, MAX(score) AS score FROM scores WHERE board_key = ? AND created_at >= ? GROUP BY device_id`,
+      `SELECT device_id, MAX(score) AS score FROM scores WHERE board_key = ? AND created_at >= ? AND ${RANKED} GROUP BY device_id`,
     ).bind(board, mode === 'daily' ? 0 : since).all<{ device_id: string; score: number }>();
     rows = res.results;
   }
@@ -753,8 +780,8 @@ const BADGE_MIN_PLAYERS = 10;
 app.get('/api/badges', async (c) => {
   const me = requireMe(c);
   const res = await c.env.DB.prepare(
-    `SELECT COALESCE(league, 'all') AS scope, device_id, SUM(count) AS n FROM scores WHERE mode <> 'archive' GROUP BY scope, device_id
-     UNION ALL SELECT 'all5', device_id, SUM(count) FROM scores WHERE mode <> 'archive' GROUP BY device_id`,
+    `SELECT COALESCE(league, 'all') AS scope, device_id, SUM(count) AS n FROM scores WHERE mode <> 'archive' AND ${RANKED} GROUP BY scope, device_id
+     UNION ALL SELECT 'all5', device_id, SUM(count) FROM scores WHERE mode <> 'archive' AND ${RANKED} GROUP BY device_id`,
   ).all<{ scope: string; device_id: string; n: number }>();
   const byScope = new Map<string, { device_id: string; n: number }[]>();
   for (const r of res.results) if (r.scope !== 'all') (byScope.get(r.scope) ?? byScope.set(r.scope, []).get(r.scope)!).push(r);
@@ -800,7 +827,7 @@ async function pointRows(c: C, by: 'club' | 'country', period: 'week' | 'all'): 
   const res = await c.env.DB.prepare(
     `SELECT p.${by} AS k, SUM(s.count) AS points, COUNT(DISTINCT s.device_id) AS players
      FROM scores s JOIN profiles p ON p.id = s.device_id
-     WHERE s.board_key >= ? AND s.board_key < 'daily;' AND p.${by} NOT IN ('other', '')
+     WHERE s.board_key >= ? AND s.board_key < 'daily;' AND (s.flag IS NULL OR s.flag = 'cleared') AND p.${by} NOT IN ('other', '')
      GROUP BY p.${by} ORDER BY points DESC`,
   ).bind('daily:' + from).all<{ k: string; points: number; players: number }>();
   return res.results.map((r, i) => ({ rank: i + 1, key: r.k, points: r.points, players: r.players }));
