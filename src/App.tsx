@@ -7,6 +7,7 @@ import { themeLabel } from './format';
 import { Badges, ClubPage, Leaderboard, LoginLink, ProfileForm, RankedThemePicker, Silhouette, StadiumCurtain, ThemePicker, War, type CurtainState } from './ui';
 import { ChallengePage, GameScreen } from './screens/Game';
 import { AdminPage } from './screens/Admin';
+import { MysteryCard, MysteryScreen } from './screens/Mystery';
 import { RoomScreen, RoomHome } from './screens/Room';
 import type { BoardKind, Criterion, DailyHistoryItem, DailyInfo, Meta, SoloMode } from '../shared/types';
 import { MODE_RULES, SOLO_GROUPS } from '../shared/types';
@@ -65,7 +66,7 @@ export default function App() {
     { id: 'leaderboards', icon: '🏆', label: t0.nav.boards },
   ];
   const head = route.split('/').filter(Boolean)[0] ?? '';
-  const section = head === 'game' ? '' : head === 'club' ? 'leaderboards' : head;
+  const section = head === 'mystery' ? 'daily' : head === 'game' ? '' : head === 'club' ? 'leaderboards' : head;
   const nav: Nav = { go: useCallback((p: string) => { location.hash = p; }, []) };
   const parts = shown.split('/').filter(Boolean);
 
@@ -77,6 +78,7 @@ export default function App() {
   else if (parts[0] === 'profile' && parts[1]) screen = <div className="page narrow"><ProfileForm meta={meta} presetClub={parts[1]} onDone={() => { setHasProfile(true); nav.go('/leaderboards'); }} /></div>;
   else if (parts[0] === 'login' && parts[1]) screen = <div className="page narrow"><LoginLink token={parts[1]} onDone={() => { setHasProfile(!!getSession()); nav.go('/'); }} /></div>;
   else if (parts[0] === 'game' && parts[1]) screen = <GameScreen id={parts[1]} meta={meta} nav={nav} />;
+  else if (parts[0] === 'mystery') screen = <MysteryScreen meta={meta} nav={nav} date={parts[1] && /^\d{4}-\d{2}-\d{2}$/.test(parts[1]) ? parts[1] : undefined} />;
   else if (parts[0] === 'daily') screen = <Home meta={meta} nav={nav} dailyOnly />;
   else if (parts[0] === 'solo') screen = <SoloSetup meta={meta} nav={nav} />;
   else if (parts[0] === 'room' && parts[1]) screen = <RoomScreen code={parts[1].toUpperCase()} meta={meta} nav={nav} />;
@@ -159,6 +161,8 @@ function Home({ meta, nav, dailyOnly }: { meta: Meta; nav: Nav; dailyOnly?: bool
           )}
         </section>
       )}
+
+      <MysteryCard nav={nav} />
 
       {!dailyOnly && <div className="grid2">
         <a className="card tile" href="#/solo">
