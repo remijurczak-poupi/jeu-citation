@@ -22,6 +22,9 @@ interface Env {
   MAIL_FROM?: string; // sender of those e-mails, e.g. Name the Players <login@example.com>
   ROOMS: DurableObjectNamespace;
   ASSETS: Fetcher;
+  // Per-IP limits on the endpoints that create rows or send e-mails (optional: absent in local tests).
+  WRITE_LIMIT?: RateLimit;
+  EMAIL_LIMIT?: RateLimit;
 }
 interface Me { id: string; pseudo: string; club: string; country: string }
 type C = Context<{ Bindings: Env; Variables: { me: Me | null } }>;
@@ -71,6 +74,24 @@ async function auth(env: Env, id?: string | null, secret?: string | null): Promi
 
 app.use('/api/*', async (c, next) => {
   c.set('me', await auth(c.env, c.req.header('x-device-id'), c.req.header('x-device-secret')));
+  await next();
+});
+// Per-IP brakes on the endpoints that write to the database or send e-mails, so that a script cannot
+// fill D1 (100k writes a day on the free plan) with guest profiles or spend the e-mail quota.
+const LIMITED: [RegExp, 'WRITE_LIMIT' | 'EMAIL_LIMIT'][] = [
+  [/^\/api\/auth\/email$/, 'EMAIL_LIMIT'],
+  [/^\/api\/(profile(\/guest)?|auth\/google|auth\/email\/verify|reports|rooms|challenges|leagues)$/, 'WRITE_LIMIT'],
+];
+app.use('/api/*', async (c, next) => {
+  if (c.req.method === 'POST') {
+    const rule = LIMITED.find(([re]) => re.test(c.req.path));
+    const limiter = rule ? c.env[rule[1]] : undefined;
+    if (limiter) {
+      const ip = c.req.header('cf-connecting-ip') ?? 'unknown';
+      const { success } = await limiter.limit({ key: `${c.req.path}:${ip}` });
+      if (!success) throw new HttpError(429, 'too_many_requests');
+    }
+  }
   await next();
 });
 const requireMe = (c: C) => {
@@ -457,16 +478,15 @@ app.get('/api/challenges/:code', async (c) => {
 
 // ---------- "this answer should have counted" ----------
 app.post('/api/reports', async (c) => {
-  const me = c.get('me');
+  // A profile is needed (every game has one), so that the hourly cap below always applies.
+  const me = requireMe(c);
   const b = (await c.req.json().catch(() => ({}))) as { gameId?: string; text?: string; recognised?: string; criterion?: unknown; note?: string };
   if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > 80) throw new HttpError(400, 'bad_text');
   const criterion = parseCriterion(b.criterion ?? {});
-  if (me) {
-    const recent = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM reports WHERE device_id = ? AND created_at > ?').bind(me.id, Date.now() - 3600_000).first<{ n: number }>();
-    if ((recent?.n ?? 0) >= 30) throw new HttpError(429, 'too_many_reports');
-  }
+  const recent = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM reports WHERE device_id = ? AND created_at > ?').bind(me.id, Date.now() - 3600_000).first<{ n: number }>();
+  if ((recent?.n ?? 0) >= 30) throw new HttpError(429, 'too_many_reports');
   const ins = await c.env.DB.prepare('INSERT INTO reports (device_id, game_id, text, recognised, criterion, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(me?.id ?? null, typeof b.gameId === 'string' ? b.gameId.slice(0, 40) : null, b.text.trim(), typeof b.recognised === 'string' ? b.recognised.slice(0, 120) : null,
+    .bind(me.id, typeof b.gameId === 'string' ? b.gameId.slice(0, 40) : null, b.text.trim(), typeof b.recognised === 'string' ? b.recognised.slice(0, 120) : null,
       JSON.stringify(criterion), typeof b.note === 'string' ? b.note.slice(0, 300) : null, Date.now()).run();
   // Checked right away against Wikipedia; a slow answer is finished in the background (and retried by the cron).
   const check = checkReport(c.env, ins.meta.last_row_id);
@@ -486,16 +506,22 @@ function reportedPlayer(text: string, recognised: string | null): number | undef
 }
 
 /** Makes a player count for the report's theme, and credits the answer in the reported game. */
-async function acceptReport(env: Env, id: number, playerQ: string, status: 'accepted' | 'auto_accepted', resolution: string) {
-  const r = await env.DB.prepare('SELECT criterion, game_id FROM reports WHERE id = ?').bind(id).first<{ criterion: string; game_id: string | null }>();
+/** Most answers a single game can gain from reports (a few gaps in the data, not a way to rebuild a score). */
+const MAX_CREDITED_REPORTS = 5;
+
+async function acceptReport(env: Env, id: number, playerQ: string, status: 'accepted' | 'auto_accepted', resolution: string, credit = true) {
+  const r = await env.DB.prepare('SELECT criterion, game_id, device_id FROM reports WHERE id = ?').bind(id).first<{ criterion: string; game_id: string | null; device_id: string | null }>();
   if (!r) return;
   await env.DB.batch([
     env.DB.prepare('INSERT OR IGNORE INTO accepted_answers (theme_key, player, report_id, created_at) VALUES (?, ?, ?, ?)').bind(criterionKey(JSON.parse(r.criterion)), playerQ, id, Date.now()),
     env.DB.prepare('UPDATE reports SET status = ?, resolution = ?, checked_at = ? WHERE id = ?').bind(status, resolution, Date.now(), id),
   ]);
-  if (!r.game_id) return;
+  if (!credit || !r.game_id) return;
   const g = await env.DB.prepare('SELECT * FROM games WHERE id = ?').bind(r.game_id).first<GameRow>();
-  if (!g || criterionKey(JSON.parse(g.criterion)) !== criterionKey(JSON.parse(r.criterion))) return;
+  // Only the reporter's own game, on the same theme, and only a few times per game.
+  if (!g || g.device_id !== r.device_id || criterionKey(JSON.parse(g.criterion)) !== criterionKey(JSON.parse(r.criterion))) return;
+  const credited = await env.DB.prepare("SELECT COUNT(*) AS n FROM reports WHERE game_id = ? AND status IN ('accepted', 'auto_accepted') AND id <> ?").bind(g.id, id).first<{ n: number }>();
+  if ((credited?.n ?? 0) >= MAX_CREDITED_REPORTS) return;
   const found: string[] = JSON.parse(g.found);
   if (found.includes(playerQ) || g.mode === 'chain') return;
   found.push(playerQ);
@@ -518,7 +544,10 @@ async function checkReport(env: Env, id: number): Promise<'accept' | 'reject' | 
   if (p === undefined) v = { verdict: 'manual', reason: 'player not recognised' };
   else if (getMatcher(criterion).scope.players.has(p)) v = { verdict: 'accept', reason: 'already in the theme with our data' };
   else v = await verifyReport(p, criterion).catch((e: Error) => ({ verdict: 'manual' as const, reason: 'check failed: ' + e.message }));
-  if (v.verdict === 'accept') await acceptReport(env, id, data.players[p!].q, 'auto_accepted', v.reason);
+  // A player already in the theme would have counted during the game: nothing to credit (else a finished
+  // game could be topped up afterwards by "reporting" every player of the theme).
+  const inTheme = p !== undefined && getMatcher(criterion).scope.players.has(p);
+  if (v.verdict === 'accept') await acceptReport(env, id, data.players[p!].q, 'auto_accepted', v.reason, !inTheme);
   else await env.DB.prepare('UPDATE reports SET status = ?, resolution = ?, checked_at = ? WHERE id = ?').bind(v.verdict === 'reject' ? 'auto_rejected' : 'open', v.reason, Date.now(), id).run();
   return v.verdict;
 }
