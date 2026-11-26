@@ -1,0 +1,52 @@
+# Daily backup of the D1 database (profiles, games, scores, accounts…), encrypted,
+# kept 90 days as a workflow artifact. Cloudflare's own Time Travel adds 7 days (free plan) or 30 days (paid plan) of point-in-time restore.
+# Needs the repository secret BACKUP_PASSPHRASE (a long random password, kept in a password manager):
+# without it the backup cannot be read back, so keep it somewhere safe.
+#
+# Restore (on a computer with Node): download the artifact from the Actions tab, then
+#   gpg --decrypt d1-backup.sql.gpg > backup.sql
+#   npx wrangler d1 execute name-the-players --remote --file backup.sql   (into an empty database)
+name: Backup database
+
+on:
+  schedule:
+    - cron: '42 3 * * *' # every day, 03:42 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Export the database
+        run: |
+          test -n "$BACKUP_PASSPHRASE" || { echo "::error::Add the BACKUP_PASSPHRASE repository secret first"; exit 1; }
+          npx wrangler d1 export name-the-players --remote --output "$RUNNER_TEMP/backup.sql"
+          test -s "$RUNNER_TEMP/backup.sql"
+          echo "Backup: $(wc -c < "$RUNNER_TEMP/backup.sql") bytes"
+
+      - name: Encrypt it (the e-mail addresses must never sit in clear in an artifact)
+        run: |
+          printf %s "$BACKUP_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --symmetric --cipher-algo AES256 --output d1-backup.sql.gpg "$RUNNER_TEMP/backup.sql"
+          rm "$RUNNER_TEMP/backup.sql"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d1-backup-${{ github.run_id }}
+          path: d1-backup.sql.gpg
+          retention-days: 90
+          if-no-files-found: error

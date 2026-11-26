@@ -25,6 +25,7 @@ interface Env {
   // Per-IP limits on the endpoints that create rows or send e-mails (optional: absent in local tests).
   WRITE_LIMIT?: RateLimit;
   EMAIL_LIMIT?: RateLimit;
+  ADMIN_LIMIT?: RateLimit;
 }
 interface Me { id: string; pseudo: string; club: string; country: string }
 type C = Context<{ Bindings: Env; Variables: { me: Me | null } }>;
@@ -83,6 +84,11 @@ const LIMITED: [RegExp, 'WRITE_LIMIT' | 'EMAIL_LIMIT'][] = [
   [/^\/api\/(profile(\/guest)?|auth\/google|auth\/email\/verify|reports|rooms|challenges|leagues)$/, 'WRITE_LIMIT'],
 ];
 app.use('/api/*', async (c, next) => {
+  // Admin: every call counts (GET too), so that the password cannot be guessed by trying many.
+  if (c.req.path.startsWith('/api/admin/') && c.env.ADMIN_LIMIT) {
+    const { success } = await c.env.ADMIN_LIMIT.limit({ key: c.req.header('cf-connecting-ip') ?? 'unknown' });
+    if (!success) throw new HttpError(429, 'too_many_requests');
+  }
   if (c.req.method === 'POST') {
     const rule = LIMITED.find(([re]) => re.test(c.req.path));
     const limiter = rule ? c.env[rule[1]] : undefined;
